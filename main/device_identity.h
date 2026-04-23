@@ -17,6 +17,7 @@ DeviceIdentity device_identity_get(void);
 bool device_identity_set_device_id(uint16_t device_id);
 bool device_identity_set_device_sn(uint64_t device_sn);
 bool device_identity_reset_defaults(void);
+bool device_identity_reset_device_id_default(void);
 
 #ifdef __cplusplus
 }

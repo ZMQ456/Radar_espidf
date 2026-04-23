@@ -10,6 +10,7 @@ extern "C" {
 typedef enum {
     WIFI_MANAGER_IDLE = 0,
     WIFI_MANAGER_INITIALIZED,
+    WIFI_MANAGER_SCANNING,
     WIFI_MANAGER_CONNECTING,
     WIFI_MANAGER_CONNECTED,
     WIFI_MANAGER_DISCONNECTED,
@@ -26,7 +27,19 @@ typedef struct {
     uint32_t reconnect_attempts;
     uint64_t last_state_change_ms;
     char ssid[33];
+    char ip[16];
 } WiFiManagerSnapshot;
+
+typedef struct {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t channel;
+    char encryption[16];
+} WiFiScanRecord;
+
+typedef struct {
+    char ssid[33];
+} WiFiSavedNetwork;
 
 bool wifi_manager_init(void);
 bool wifi_manager_is_initialized(void);
@@ -39,6 +52,9 @@ bool wifi_manager_configure_and_connect(const char *ssid, const char *password);
 bool wifi_manager_connect(void);
 void wifi_manager_disconnect(void);
 bool wifi_manager_clear_credentials(void);
+uint32_t wifi_manager_scan_networks(WiFiScanRecord *records, uint32_t max_records);
+uint32_t wifi_manager_get_saved_networks(WiFiSavedNetwork *networks, uint32_t max_networks);
+bool wifi_manager_has_saved_network(const char *ssid);
 const char *wifi_manager_get_ssid(void);
 
 #ifdef __cplusplus

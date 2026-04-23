@@ -1,11 +1,11 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "C_Cpp.default.compileCommands": "${workspaceFolder}/build_ninja/compile_commands.json",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
   "C_Cpp.default.compilerPath": "C:\\Users\\z1831\\.espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20240530\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
   "cmake.configureOnOpen": false,
   "cmake.cmakePath": "C:\\Users\\z1831\\.espressif\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
   "cmake.generator": "Ninja",
-  "cmake.buildDirectory": "${workspaceFolder}/build_ninja",
+  "cmake.buildDirectory": "${workspaceFolder}/build",
   "cmake.configureSettings": {
     "CMAKE_BUILD_TYPE": "Debug",
     "CMAKE_EXPORT_COMPILE_COMMANDS": true
@@ -25,7 +25,7 @@
   "idf.monitorBaudRate": "115200",
   "idf.currentSetup": "E:\\esp-32\\v5.3.4\\esp-idf",
   "idf.pythonBinPathWin": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env\\Scripts\\python.exe",
-  "idf.buildPath": "${workspaceFolder}/build_ninja",
+  "idf.buildPath": "${workspaceFolder}/build",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3",
     "IDF_PATH": "E:\\esp-32\\v5.3.4\\esp-idf",
@@ -43,7 +43,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=e:\\ESP\\SofeWare\\espidf\\hello_world\\build_ninja"
+    "--compile-commands-dir=e:\\ESP\\SofeWare\\espidf\\hello_world\\build"
   ],
   "idf.flashType": "UART"
 }

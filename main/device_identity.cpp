@@ -142,3 +142,9 @@ bool device_identity_reset_defaults(void)
     gDeviceIdentity.device_sn = APP_DEVICE_SN_DEFAULT;
     return device_identity_persist();
 }
+
+bool device_identity_reset_device_id_default(void)
+{
+    gDeviceIdentity.device_id = APP_DEVICE_ID_DEFAULT;
+    return device_identity_persist();
+}

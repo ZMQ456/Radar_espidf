@@ -35,9 +35,11 @@ bool mqtt_manager_configure(const char *uri, const char *client_id);
 bool mqtt_manager_is_initialized(void);
 bool mqtt_manager_is_connected(void);
 MqttManagerSnapshot mqtt_manager_get_snapshot(void);
+bool mqtt_manager_refresh_identity(void);
 bool mqtt_manager_publish_text(const char *topic, const char *payload, int qos, int retain);
 bool mqtt_manager_publish_online(void);
 bool mqtt_manager_publish_radar_snapshot(const RadarReportSnapshot *snapshot);
+bool mqtt_manager_publish_sleep_snapshot(const RadarReportSnapshot *snapshot);
 
 #ifdef __cplusplus
 }

@@ -5,9 +5,16 @@
 #define APP_WIFI_DEFAULT_SSID     ""  
 #define APP_WIFI_DEFAULT_PASSWORD ""
 
-// Minimal MQTT test configuration.
-#define APP_MQTT_BROKER_URI "mqtt://192.168.1.100:1883"
-#define APP_MQTT_CLIENT_ID  "espidf-radar-demo"
+// MQTT configuration aligned with the Arduino enjoy-iot prototype.
+#define APP_MQTT_BROKER_URI "mqtt://www.lmhrt.cn:1883"
+#define APP_MQTT_CLIENT_ID  "dEkr5BkkXTFZFBdR"
+
+// InfluxDB endpoint aligned with the Arduino prototype.
+#define APP_INFLUXDB_HOST   "www.lmhrt.cn"
+#define APP_INFLUXDB_PORT   8086
+#define APP_INFLUXDB_TOKEN  "KuTa5ZsqoHIhi2IglOO06zExUYw1_mJ6K0mcA9X1y6O6CJDog3_Cgr8mUw1SwpuCCKRElqxa6wAhrrhsYPytkg=="
+#define APP_INFLUXDB_ORG    "gzlg"
+#define APP_INFLUXDB_BUCKET "gzlg"
 
 // Temporary bootstrap identity defaults.
 #define APP_DEVICE_ID_DEFAULT 1001U

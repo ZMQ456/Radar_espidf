@@ -103,8 +103,34 @@ RadarVitalsSnapshot radar_manager_get_vitals_snapshot(void)
     snapshot.motion = sensorData.motion;
     snapshot.sleep_state = sensorData.sleep_state;
     snapshot.body_movement = sensorData.body_movement;
+    snapshot.breath_status = sensorData.breath_status;
     snapshot.distance = sensorData.distance;
     snapshot.abnormal_state = sensorData.abnormal_state;
+    snapshot.avg_heart_rate = sensorData.avg_heart_rate;
+    snapshot.avg_breath_rate = sensorData.avg_breath_rate;
+    snapshot.turn_count = sensorData.turn_count;
+    snapshot.large_move_ratio = sensorData.large_move_ratio;
+    snapshot.small_move_ratio = sensorData.small_move_ratio;
+    snapshot.sleep_total_time = sensorData.sleep_total_time;
+    snapshot.sleep_score = sensorData.sleep_score;
+    snapshot.sleep_grade = sensorData.sleep_grade;
+    snapshot.awake_ratio = sensorData.awake_ratio;
+    snapshot.light_sleep_ratio = sensorData.light_sleep_ratio;
+    snapshot.deep_sleep_ratio = sensorData.deep_sleep_ratio;
+    snapshot.awake_time = sensorData.awake_time;
+    snapshot.light_sleep_time = sensorData.light_sleep_time;
+    snapshot.deep_sleep_time = sensorData.deep_sleep_time;
+    snapshot.turnover_count = sensorData.turnover_count;
+    snapshot.struggle_alert = sensorData.struggle_alert;
+    snapshot.no_one_alert = sensorData.no_one_alert;
+    snapshot.bed_status = sensorData.bed_status;
+    snapshot.bed_Out_Time = sensorData.bed_Out_Time;
+    snapshot.apnea_count = sensorData.apnea_count;
+    snapshot.pos_x = sensorData.pos_x;
+    snapshot.pos_y = sensorData.pos_y;
+    snapshot.pos_z = sensorData.pos_z;
+    snapshot.heartbeat_waveform = sensorData.heartbeat_waveform;
+    snapshot.breathing_waveform = sensorData.breathing_waveform;
     snapshot.last_update_ms = sensorData.last_update_ms;
     return snapshot;
 }
@@ -174,9 +200,35 @@ RadarReportSnapshot radar_manager_get_report_snapshot(uint32_t max_age_ms)
     snapshot.motion = sensorData.motion;
     snapshot.sleep_state = sensorData.sleep_state;
     snapshot.body_movement = sensorData.body_movement;
+    snapshot.breath_status = sensorData.breath_status;
     snapshot.abnormal_state = sensorData.abnormal_state;
     snapshot.heart_valid = sensorData.heart_valid;
     snapshot.breath_valid = sensorData.breath_valid;
+    snapshot.avg_heart_rate = sensorData.avg_heart_rate;
+    snapshot.avg_breath_rate = sensorData.avg_breath_rate;
+    snapshot.turn_count = sensorData.turn_count;
+    snapshot.large_move_ratio = sensorData.large_move_ratio;
+    snapshot.small_move_ratio = sensorData.small_move_ratio;
+    snapshot.sleep_total_time = sensorData.sleep_total_time;
+    snapshot.sleep_score = sensorData.sleep_score;
+    snapshot.sleep_grade = sensorData.sleep_grade;
+    snapshot.awake_ratio = sensorData.awake_ratio;
+    snapshot.light_sleep_ratio = sensorData.light_sleep_ratio;
+    snapshot.deep_sleep_ratio = sensorData.deep_sleep_ratio;
+    snapshot.awake_time = sensorData.awake_time;
+    snapshot.light_sleep_time = sensorData.light_sleep_time;
+    snapshot.deep_sleep_time = sensorData.deep_sleep_time;
+    snapshot.turnover_count = sensorData.turnover_count;
+    snapshot.struggle_alert = sensorData.struggle_alert;
+    snapshot.no_one_alert = sensorData.no_one_alert;
+    snapshot.bed_status = sensorData.bed_status;
+    snapshot.bed_Out_Time = sensorData.bed_Out_Time;
+    snapshot.apnea_count = sensorData.apnea_count;
+    snapshot.pos_x = sensorData.pos_x;
+    snapshot.pos_y = sensorData.pos_y;
+    snapshot.pos_z = sensorData.pos_z;
+    snapshot.heartbeat_waveform = sensorData.heartbeat_waveform;
+    snapshot.breathing_waveform = sensorData.breathing_waveform;
     snapshot.has_person = hasPerson ? 1U : 0U;
     snapshot.bed_occupied = bedOccupied ? 1U : 0U;
     snapshot.has_valid_vitals = hasValidVitals ? 1U : 0U;
@@ -225,13 +277,22 @@ uint32_t radar_manager_generate_device_hash(void)
         return 0U;
     }
 
+    char compactMac[13] = {};
+    size_t outIndex = 0U;
+    for (size_t i = 0; macStr[i] != '\0' && outIndex < (sizeof(compactMac) - 1U); ++i) {
+        if (macStr[i] != ':') {
+            compactMac[outIndex++] = macStr[i];
+        }
+    }
+    compactMac[outIndex] = '\0';
+
     const DeviceIdentity identity = device_identity_get();
     char hashInput[96] = {};
     std::snprintf(hashInput,
                   sizeof(hashInput),
                   "SN%llu|%s",
                   static_cast<unsigned long long>(identity.device_sn),
-                  macStr);
+                  compactMac);
 
     const uint32_t hash = calculate_crc32(reinterpret_cast<const uint8_t *>(hashInput),
                                           std::strlen(hashInput));

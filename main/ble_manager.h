@@ -18,6 +18,7 @@ typedef struct {
 bool ble_manager_init(void);
 bool ble_manager_is_initialized(void);
 bool ble_manager_is_client_connected(void);
+bool ble_manager_refresh_advertising_data(void);
 bool ble_manager_send_text(const char *payload);
 bool ble_manager_consume_received_text(char *buffer, uint32_t buffer_size);
 BleManagerSnapshot ble_manager_get_snapshot(void);

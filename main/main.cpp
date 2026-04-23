@@ -1,6 +1,11 @@
 #include "app_config.h"
 #include "device_identity.h"
+#include "driver/gpio.h"
+#include "esp_err.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "radar_manager.h"
 #include "system_state.h"
 #include "tasks_manager.h"
@@ -10,9 +15,50 @@
 
 static const char *TAG = "radar_bootstrap";
 
+static void wait_for_boot_button_release(void)
+{
+    gpio_config_t config = {};
+    config.pin_bit_mask = (1ULL << APP_BOOT_BUTTON_PIN);
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&config);
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (gpio_get_level((gpio_num_t)APP_BOOT_BUTTON_PIN) == 0) {
+        ESP_LOGW(TAG, "boot button held at startup, waiting for release");
+        while (gpio_get_level((gpio_num_t)APP_BOOT_BUTTON_PIN) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        ESP_LOGI(TAG, "boot button released, continuing startup");
+    }
+}
+
+static void init_task_watchdog(void)
+{
+    esp_task_wdt_config_t config = {};
+    config.timeout_ms = 30000;
+    config.idle_core_mask = 0;
+    config.trigger_panic = true;
+
+    esp_err_t err = esp_task_wdt_init(&config);
+    if (err == ESP_ERR_INVALID_STATE) {
+        err = esp_task_wdt_reconfigure(&config);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "task watchdog init failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "task watchdog configured timeout=%ums", (unsigned)config.timeout_ms);
+    }
+}
+
 extern "C" void app_main(void)
 {
     system_state_init();
+    wait_for_boot_button_release();
+    init_task_watchdog();
 
     if (!device_identity_init()) {
         system_state_set_error(1U);

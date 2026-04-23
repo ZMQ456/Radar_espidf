@@ -11,10 +11,13 @@
 #include "device_command.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "influx_manager.h"
 #include "emotion_analyzer_simple.h"
 #include "radar_manager.h"
 #include "sleep_analyzer.h"
@@ -42,6 +45,48 @@ static uint32_t gBreatheValue = APP_LED_BREATHE_MIN;
 static bool gBreatheIncreasing = true;
 static bool gClearConfigRequested = false;
 static bool gForceLedOff = false;
+static bool gContinuousSendEnabled = false;
+static bool gHasLastContinuousData = false;
+static uint32_t gContinuousSendIntervalMs = 500U;
+static uint64_t gLastContinuousCheckMs = 0U;
+static SensorData gLastContinuousData = {};
+static RadarReportSnapshot gLastInfluxDailySnapshot = {};
+static bool gHasLastInfluxDailySnapshot = false;
+static uint64_t gLastInfluxDailySendMs = 0U;
+static uint64_t gLastInfluxSleepSendMs = 0U;
+static uint64_t gLastMqttHeartbeatMs = 0U;
+static uint64_t gLastMqttDailySendMs = 0U;
+static uint64_t gLastMqttSleepSendMs = 0U;
+
+static constexpr uint32_t kInfluxDailyForceSendIntervalMs = 60000U;
+static constexpr uint32_t kInfluxDailyMinSendIntervalMs = 1500U;
+static constexpr uint32_t kInfluxSleepSendIntervalMs = 5000U;
+static constexpr uint32_t kMqttHeartbeatIntervalMs = 10000U;
+static constexpr uint32_t kMqttDailyDataIntervalMs = 5000U;
+static constexpr uint32_t kMqttSleepDataIntervalMs = 10000U;
+
+static void task_watchdog_register_current(const char *task_name)
+{
+    const esp_err_t status = esp_task_wdt_status(nullptr);
+    if (status == ESP_OK) {
+        return;
+    }
+    if (status == ESP_ERR_INVALID_STATE) {
+        return;
+    }
+
+    const esp_err_t err = esp_task_wdt_add(nullptr);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "watchdog add failed for %s: %s", task_name, esp_err_to_name(err));
+    }
+}
+
+static void task_watchdog_reset_current(void)
+{
+    if (esp_task_wdt_status(nullptr) == ESP_OK) {
+        (void)esp_task_wdt_reset();
+    }
+}
 
 static const char *find_json_value_start(const char *json, const char *key)
 {
@@ -68,6 +113,20 @@ static const char *find_json_value_start(const char *json, const char *key)
     return valuePos;
 }
 
+static int json_hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
 static bool json_extract_string_value(const char *json,
                                       const char *key,
                                       char *buffer,
@@ -84,11 +143,78 @@ static bool json_extract_string_value(const char *json,
 
     ++valuePos;
     size_t outIndex = 0U;
-    while (*valuePos != '\0' && *valuePos != '"' && outIndex < (buffer_size - 1U)) {
-        buffer[outIndex++] = *valuePos++;
+    while (*valuePos != '\0' && outIndex < (buffer_size - 1U)) {
+        if (*valuePos == '"') {
+            buffer[outIndex] = '\0';
+            return true;
+        }
+
+        if (*valuePos != '\\') {
+            buffer[outIndex++] = *valuePos++;
+            continue;
+        }
+
+        ++valuePos;
+        if (*valuePos == '\0') {
+            break;
+        }
+
+        switch (*valuePos) {
+        case '"':
+        case '\\':
+        case '/':
+            buffer[outIndex++] = *valuePos++;
+            break;
+        case 'b':
+            buffer[outIndex++] = '\b';
+            ++valuePos;
+            break;
+        case 'f':
+            buffer[outIndex++] = '\f';
+            ++valuePos;
+            break;
+        case 'n':
+            buffer[outIndex++] = '\n';
+            ++valuePos;
+            break;
+        case 'r':
+            buffer[outIndex++] = '\r';
+            ++valuePos;
+            break;
+        case 't':
+            buffer[outIndex++] = '\t';
+            ++valuePos;
+            break;
+        case 'u': {
+            const int h0 = json_hex_nibble(valuePos[1]);
+            const int h1 = json_hex_nibble(valuePos[2]);
+            const int h2 = json_hex_nibble(valuePos[3]);
+            const int h3 = json_hex_nibble(valuePos[4]);
+            if (h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0) {
+                buffer[outIndex] = '\0';
+                return false;
+            }
+            const unsigned codepoint = (unsigned)((h0 << 12) | (h1 << 8) | (h2 << 4) | h3);
+            if (codepoint <= 0x7FU) {
+                buffer[outIndex++] = static_cast<char>(codepoint);
+            } else if (codepoint <= 0x7FFU && outIndex + 1U < buffer_size - 1U) {
+                buffer[outIndex++] = static_cast<char>(0xC0U | (codepoint >> 6));
+                buffer[outIndex++] = static_cast<char>(0x80U | (codepoint & 0x3FU));
+            } else if (outIndex + 2U < buffer_size - 1U) {
+                buffer[outIndex++] = static_cast<char>(0xE0U | (codepoint >> 12));
+                buffer[outIndex++] = static_cast<char>(0x80U | ((codepoint >> 6) & 0x3FU));
+                buffer[outIndex++] = static_cast<char>(0x80U | (codepoint & 0x3FU));
+            }
+            valuePos += 5;
+            break;
+        }
+        default:
+            buffer[outIndex++] = *valuePos++;
+            break;
+        }
     }
     buffer[outIndex] = '\0';
-    return *valuePos == '"';
+    return false;
 }
 
 static bool json_extract_uint16_value(const char *json, const char *key, uint16_t *value)
@@ -110,6 +236,271 @@ static bool json_extract_uint16_value(const char *json, const char *key, uint16_
 
     *value = static_cast<uint16_t>(parsed);
     return true;
+}
+
+static bool json_extract_uint32_value(const char *json, const char *key, uint32_t *value)
+{
+    if (value == nullptr) {
+        return false;
+    }
+
+    const char *valuePos = find_json_value_start(json, key);
+    if (valuePos == nullptr) {
+        return false;
+    }
+
+    char *endPtr = nullptr;
+    const unsigned long parsed = std::strtoul(valuePos, &endPtr, 10);
+    if (endPtr == valuePos || parsed > 0xFFFFFFFFUL) {
+        return false;
+    }
+
+    *value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+static bool json_extract_uint64_value(const char *json, const char *key, uint64_t *value)
+{
+    if (value == nullptr) {
+        return false;
+    }
+
+    const char *valuePos = find_json_value_start(json, key);
+    if (valuePos == nullptr) {
+        return false;
+    }
+
+    char *endPtr = nullptr;
+    const unsigned long long parsed = std::strtoull(valuePos, &endPtr, 10);
+    if (endPtr == valuePos) {
+        return false;
+    }
+
+    *value = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+static void json_escape_string(const char *input, char *output, size_t output_size)
+{
+    if (output == nullptr || output_size == 0U) {
+        return;
+    }
+
+    output[0] = '\0';
+    if (input == nullptr) {
+        return;
+    }
+
+    size_t used = 0U;
+    for (size_t i = 0U; input[i] != '\0' && used < output_size - 1U; ++i) {
+        const unsigned char c = static_cast<unsigned char>(input[i]);
+        const char *escaped = nullptr;
+        switch (c) {
+        case '\"':
+            escaped = "\\\"";
+            break;
+        case '\\':
+            escaped = "\\\\";
+            break;
+        case '\b':
+            escaped = "\\b";
+            break;
+        case '\f':
+            escaped = "\\f";
+            break;
+        case '\n':
+            escaped = "\\n";
+            break;
+        case '\r':
+            escaped = "\\r";
+            break;
+        case '\t':
+            escaped = "\\t";
+            break;
+        default:
+            break;
+        }
+
+        if (escaped != nullptr) {
+            const size_t len = std::strlen(escaped);
+            if (used + len >= output_size) {
+                break;
+            }
+            std::memcpy(output + used, escaped, len);
+            used += len;
+            continue;
+        }
+
+        if (c < 0x20U) {
+            if (used + 6U >= output_size) {
+                break;
+            }
+            std::snprintf(output + used, output_size - used, "\\u%04X", (unsigned)c);
+            used += 6U;
+            continue;
+        }
+
+        output[used++] = static_cast<char>(c);
+        output[used] = '\0';
+    }
+}
+
+static uint16_t calculate_modbus_crc16(const char *data)
+{
+    uint16_t crc = 0xFFFFU;
+    if (data == nullptr) {
+        return crc;
+    }
+
+    while (*data != '\0') {
+        crc ^= static_cast<uint8_t>(*data++);
+        for (uint8_t i = 0U; i < 8U; ++i) {
+            if ((crc & 0x0001U) != 0U) {
+                crc >>= 1U;
+                crc ^= 0xA001U;
+            } else {
+                crc >>= 1U;
+            }
+        }
+    }
+    return crc;
+}
+
+static bool continuous_sensor_data_changed(const SensorData &currentData)
+{
+    if (!gHasLastContinuousData) {
+        return true;
+    }
+
+    return currentData.presence != gLastContinuousData.presence ||
+           currentData.motion != gLastContinuousData.motion ||
+           currentData.sleep_state != gLastContinuousData.sleep_state ||
+           currentData.heart_rate != gLastContinuousData.heart_rate ||
+           currentData.breath_rate != gLastContinuousData.breath_rate ||
+           currentData.heartbeat_waveform != gLastContinuousData.heartbeat_waveform ||
+           currentData.breathing_waveform != gLastContinuousData.breathing_waveform;
+}
+
+static bool influx_daily_snapshot_changed(const RadarReportSnapshot &currentData)
+{
+    if (!gHasLastInfluxDailySnapshot) {
+        return true;
+    }
+
+    return currentData.presence != gLastInfluxDailySnapshot.presence ||
+           currentData.motion != gLastInfluxDailySnapshot.motion ||
+           currentData.distance != gLastInfluxDailySnapshot.distance ||
+           currentData.sleep_state != gLastInfluxDailySnapshot.sleep_state ||
+           currentData.pos_x != gLastInfluxDailySnapshot.pos_x ||
+           currentData.pos_y != gLastInfluxDailySnapshot.pos_y ||
+           currentData.pos_z != gLastInfluxDailySnapshot.pos_z ||
+           currentData.heartbeat_waveform != gLastInfluxDailySnapshot.heartbeat_waveform ||
+           currentData.breathing_waveform != gLastInfluxDailySnapshot.breathing_waveform ||
+           currentData.abnormal_state != gLastInfluxDailySnapshot.abnormal_state ||
+           currentData.bed_status != gLastInfluxDailySnapshot.bed_status ||
+           currentData.struggle_alert != gLastInfluxDailySnapshot.struggle_alert ||
+           currentData.no_one_alert != gLastInfluxDailySnapshot.no_one_alert ||
+           currentData.heart_rate != gLastInfluxDailySnapshot.heart_rate ||
+           currentData.breath_rate != gLastInfluxDailySnapshot.breath_rate;
+}
+
+static bool send_continuous_radar_packet_to_ble(void)
+{
+    const SensorData currentData = radar_manager_get_sensor_data();
+    if (!continuous_sensor_data_changed(currentData)) {
+        return false;
+    }
+
+    char radarDataCore[128] = {};
+    if (currentData.presence > 0U) {
+        std::snprintf(radarDataCore,
+                      sizeof(radarDataCore),
+                      "%.1f|%.1f|%d|%d|%u|%u|%u",
+                      currentData.heart_rate,
+                      currentData.breath_rate,
+                      currentData.heartbeat_waveform,
+                      currentData.breathing_waveform,
+                      (unsigned)currentData.presence,
+                      (unsigned)currentData.motion,
+                      (unsigned)currentData.sleep_state);
+    } else {
+        std::snprintf(radarDataCore, sizeof(radarDataCore), "0.0|0.0|0|0|0|0|0");
+    }
+
+    char payload[160] = {};
+    std::snprintf(payload,
+                  sizeof(payload),
+                  "%s|%x",
+                  radarDataCore,
+                  (unsigned)calculate_modbus_crc16(radarDataCore));
+
+    const bool sent = ble_manager_send_text(payload);
+    gLastContinuousData = currentData;
+    gHasLastContinuousData = true;
+    return sent;
+}
+
+static bool send_radar_data_snapshot_to_ble(void)
+{
+    const DeviceIdentity identity = device_identity_get();
+    const SensorData currentData = radar_manager_get_sensor_data();
+    const uint64_t nowMs = radar_now_ms();
+
+    char payload[1024] = {};
+    std::snprintf(payload,
+                  sizeof(payload),
+                  "{\"type\":\"radarData\",\"success\":true,\"deviceId\":%u,"
+                  "\"timestamp\":%" PRIu64 ",\"presence\":%u,\"heartRate\":%.1f,"
+                  "\"breathRate\":%.1f,\"motion\":%u,\"heartbeatWaveform\":%d,"
+                  "\"breathingWaveform\":%d,\"distance\":%u,\"bodyMovement\":%u,"
+                  "\"breathStatus\":%u,\"sleepState\":%u,\"sleepTime\":%u,"
+                  "\"sleepScore\":%u,\"avgHeartRate\":%u,\"avgBreathRate\":%u,"
+                  "\"turnCount\":%u,\"largeMoveRatio\":%u,\"smallMoveRatio\":%u,"
+                  "\"sleepQualityGrade\":%u,\"totalSleepDuration\":%u,"
+                  "\"awakeDurationRatio\":%u,\"lightSleepRatio\":%u,\"deepSleepRatio\":%u,"
+                  "\"outOfBedDuration\":%u,\"apneaCount\":%u,\"struggleAlert\":%u,"
+                  "\"noOneAlert\":%u,\"awakeDuration\":%u,\"lightSleepDuration\":%u,"
+                  "\"deepSleepDuration\":%u,\"humanPositionX\":%d,\"humanPositionY\":%d,"
+                  "\"humanPositionZ\":%d,\"abnormalState\":%u,\"heartValid\":%u,"
+                  "\"breathValid\":%u}",
+                  (unsigned)identity.device_id,
+                  nowMs,
+                  (unsigned)currentData.presence,
+                  currentData.heart_rate,
+                  currentData.breath_rate,
+                  (unsigned)currentData.motion,
+                  currentData.heartbeat_waveform,
+                  currentData.breathing_waveform,
+                  (unsigned)currentData.distance,
+                  (unsigned)currentData.body_movement,
+                  (unsigned)currentData.breath_status,
+                  (unsigned)currentData.sleep_state,
+                  (unsigned)currentData.sleep_time,
+                  (unsigned)currentData.sleep_score,
+                  (unsigned)currentData.avg_heart_rate,
+                  (unsigned)currentData.avg_breath_rate,
+                  (unsigned)currentData.turn_count,
+                  (unsigned)currentData.large_move_ratio,
+                  (unsigned)currentData.small_move_ratio,
+                  (unsigned)currentData.sleep_grade,
+                  (unsigned)currentData.sleep_total_time,
+                  (unsigned)currentData.awake_ratio,
+                  (unsigned)currentData.light_sleep_ratio,
+                  (unsigned)currentData.deep_sleep_ratio,
+                  (unsigned)currentData.bed_Out_Time,
+                  (unsigned)currentData.apnea_count,
+                  (unsigned)currentData.struggle_alert,
+                  (unsigned)currentData.no_one_alert,
+                  (unsigned)currentData.awake_time,
+                  (unsigned)currentData.light_sleep_time,
+                  (unsigned)currentData.deep_sleep_time,
+                  (int)currentData.pos_x,
+                  (int)currentData.pos_y,
+                  (int)currentData.pos_z,
+                  (unsigned)currentData.abnormal_state,
+                  (unsigned)currentData.heart_valid,
+                  (unsigned)currentData.breath_valid);
+    return ble_manager_send_text(payload);
 }
 
 static NetworkStatus to_system_network_status(TaskNetworkStatus status)
@@ -210,7 +601,8 @@ static void clearStoredConfig(void)
 {
     ESP_LOGW(TAG, "clearing stored wifi/device configuration");
     (void)wifi_manager_clear_credentials();
-    (void)device_identity_reset_defaults();
+    (void)device_identity_reset_device_id_default();
+    (void)mqtt_manager_refresh_identity();
     setNetworkStatus(NET_DISCONNECTED);
     sendStatusToBLE();
 }
@@ -220,24 +612,35 @@ void sendStatusToBLE(void)
     const DeviceIdentity identity = device_identity_get();
     const WiFiManagerSnapshot wifiSnapshot = wifi_manager_get_snapshot();
     const BleManagerSnapshot bleSnapshot = ble_manager_get_snapshot();
+    char escapedSsid[80] = {};
+    char escapedBleName[80] = {};
+    json_escape_string(wifiSnapshot.ssid[0] != '\0' ? wifiSnapshot.ssid : "",
+                       escapedSsid,
+                       sizeof(escapedSsid));
+    json_escape_string(bleSnapshot.device_name[0] != '\0' ? bleSnapshot.device_name : "",
+                       escapedBleName,
+                       sizeof(escapedBleName));
 
-    char payload[256] = {};
+    char payload[512] = {};
     std::snprintf(payload,
                   sizeof(payload),
                   "{\"type\":\"status\",\"deviceId\":%u,\"deviceSn\":%" PRIu64 ","
                   "\"wifiConfigured\":%s,\"wifiConnected\":%s,\"wifiSsid\":\"%s\","
+                  "\"wifiIP\":\"%s\",\"ipAddress\":\"%s\","
                   "\"bleReady\":%u,\"bleAdvertising\":%u,\"bleConnected\":%u,"
                   "\"bleNotify\":%u,\"bleName\":\"%s\"}",
                   (unsigned)identity.device_id,
                   identity.device_sn,
                   wifiSnapshot.has_credentials ? "true" : "false",
                   wifiSnapshot.connected ? "true" : "false",
-                  wifiSnapshot.ssid[0] != '\0' ? wifiSnapshot.ssid : "",
+                  escapedSsid,
+                  wifiSnapshot.ip,
+                  wifiSnapshot.ip,
                   (unsigned)bleSnapshot.initialized,
                   (unsigned)bleSnapshot.advertising,
                   (unsigned)bleSnapshot.connected,
                   (unsigned)bleSnapshot.notify_enabled,
-                  bleSnapshot.device_name[0] != '\0' ? bleSnapshot.device_name : "");
+                  escapedBleName);
 
     const bool sent = ble_manager_send_text(payload);
     ESP_LOGI(TAG, "BLE status payload %s: %s", sent ? "sent" : "prepared", payload);
@@ -261,15 +664,22 @@ void processBLEConfig(void)
     if (std::strcmp(command, "queryStatus") == 0) {
         const DeviceIdentity identity = device_identity_get();
         const WiFiManagerSnapshot wifiSnapshot = wifi_manager_get_snapshot();
-        char payload[256] = {};
+        char escapedSsid[80] = {};
+        json_escape_string(wifiSnapshot.ssid[0] != '\0' ? wifiSnapshot.ssid : "",
+                           escapedSsid,
+                           sizeof(escapedSsid));
+        char payload[512] = {};
         std::snprintf(payload,
                       sizeof(payload),
                       "{\"type\":\"deviceStatus\",\"success\":true,\"deviceId\":%u,"
-                      "\"wifiConfigured\":%s,\"wifiConnected\":%s,\"wifiSsid\":\"%s\"}",
+                      "\"wifiConfigured\":%s,\"wifiConnected\":%s,\"wifiSsid\":\"%s\","
+                      "\"wifiIP\":\"%s\",\"ipAddress\":\"%s\"}",
                       (unsigned)identity.device_id,
                       wifiSnapshot.has_credentials ? "true" : "false",
                       wifiSnapshot.connected ? "true" : "false",
-                      wifiSnapshot.ssid[0] != '\0' ? wifiSnapshot.ssid : "");
+                      escapedSsid,
+                      wifiSnapshot.ip,
+                      wifiSnapshot.ip);
         (void)ble_manager_send_text(payload);
         return;
     }
@@ -296,8 +706,35 @@ void processBLEConfig(void)
         char payload[160] = {};
         std::snprintf(payload,
                       sizeof(payload),
-                      "{\"type\":\"setDeviceIdResult\",\"success\":true,\"newDeviceId\":%u}",
+                      "{\"type\":\"setDeviceIdResult\",\"success\":true,"
+                      "\"message\":\"\\u8bbe\\u5907ID\\u8bbe\\u7f6e\\u6210\\u529f\","
+                      "\"newDeviceId\":%u}",
                       (unsigned)newDeviceId);
+        (void)ble_manager_send_text(payload);
+        sendStatusToBLE();
+        return;
+    }
+
+    if (std::strcmp(command, "setDeviceSn") == 0) {
+        uint64_t newDeviceSn = 0ULL;
+        if (!json_extract_uint64_value(receivedText, "newDeviceSn", &newDeviceSn)) {
+            (void)ble_manager_send_text("{\"type\":\"error\",\"message\":\"missing newDeviceSn\"}");
+            return;
+        }
+
+        if (!device_identity_set_device_sn(newDeviceSn)) {
+            (void)ble_manager_send_text(
+                "{\"type\":\"setDeviceSnResult\",\"success\":false,\"message\":\"persist failed\"}");
+            return;
+        }
+
+        char payload[192] = {};
+        std::snprintf(payload,
+                      sizeof(payload),
+                      "{\"type\":\"setDeviceSnResult\",\"success\":true,\"newDeviceSn\":%" PRIu64 "}",
+                      newDeviceSn);
+        (void)ble_manager_refresh_advertising_data();
+        (void)mqtt_manager_refresh_identity();
         (void)ble_manager_send_text(payload);
         sendStatusToBLE();
         return;
@@ -316,23 +753,37 @@ void processBLEConfig(void)
             password[0] = '\0';
         }
 
-        const bool configured = wifi_manager_set_credentials(ssid, password);
-        if (!configured) {
-            (void)ble_manager_send_text(
-                "{\"type\":\"wifiConfigResult\",\"success\":false,\"message\":\"store failed\"}");
-            return;
-        }
-
-        const bool connected = wifi_manager_connect();
-        char payload[256] = {};
+        const bool connected = wifi_manager_configure_and_connect(ssid, password);
+        const WiFiManagerSnapshot wifiSnapshot = wifi_manager_get_snapshot();
+        char escapedSsid[80] = {};
+        char escapedPassword[140] = {};
+        json_escape_string(ssid, escapedSsid, sizeof(escapedSsid));
+        json_escape_string(password, escapedPassword, sizeof(escapedPassword));
+        char payload[384] = {};
         std::snprintf(payload,
                       sizeof(payload),
                       "{\"type\":\"wifiConfigResult\",\"success\":%s,\"ssid\":\"%s\","
-                      "\"message\":\"%s\"}",
+                      "\"message\":\"%s\",\"ip\":\"%s\",\"rssi\":%d}",
                       connected ? "true" : "false",
-                      ssid,
-                      connected ? "wifi connected" : "wifi connect failed");
+                      escapedSsid,
+                      connected
+                          ? "\\u0057\\u0069\\u0046\\u0069\\u914d\\u7f6e\\u6210\\u529f"
+                          : "\\u0057\\u0069\\u0046\\u0069\\u914d\\u7f6e\\u5931\\u8d25\\uff0c\\u8bf7\\u68c0\\u67e5\\u5bc6\\u7801\\u662f\\u5426\\u6b63\\u786e",
+                      wifiSnapshot.ip,
+                      (int)wifiSnapshot.rssi);
         (void)ble_manager_send_text(payload);
+        if (connected) {
+            char connectedPayload[512] = {};
+            std::snprintf(connectedPayload,
+                          sizeof(connectedPayload),
+                          "{\"type\":\"wifiConnected\",\"success\":true,\"ssid\":\"%s\","
+                          "\"password\":\"%s\",\"ip\":\"%s\",\"rssi\":%d}",
+                          escapedSsid,
+                          escapedPassword,
+                          wifiSnapshot.ip,
+                          (int)wifiSnapshot.rssi);
+            (void)ble_manager_send_text(connectedPayload);
+        }
         sendStatusToBLE();
         return;
     }
@@ -342,13 +793,15 @@ void processBLEConfig(void)
         const bool hasContent =
             json_extract_string_value(receivedText, "content", content, sizeof(content));
 
-        char payload[256] = {};
+        char payload[384] = {};
         if (hasContent) {
+            char escapedContent[260] = {};
+            json_escape_string(content, escapedContent, sizeof(escapedContent));
             std::snprintf(payload,
                           sizeof(payload),
                           "{\"type\":\"echoResponse\",\"originalContent\":\"%s\","
                           "\"receivedSuccessfully\":true}",
-                          content);
+                          escapedContent);
         } else {
             std::snprintf(payload,
                           sizeof(payload),
@@ -360,44 +813,153 @@ void processBLEConfig(void)
     }
 
     if (std::strcmp(command, "queryRadarData") == 0) {
-        const DeviceIdentity identity = device_identity_get();
-        const SensorData currentData = radar_manager_get_sensor_data();
-        const uint64_t nowMs = radar_now_ms();
+        (void)send_radar_data_snapshot_to_ble();
+        return;
+    }
 
-        char payload[512] = {};
+    if (std::strcmp(command, "startContinuousSend") == 0) {
+        uint32_t intervalMs = gContinuousSendIntervalMs;
+        if (json_extract_uint32_value(receivedText, "interval", &intervalMs)) {
+            if (intervalMs < 100U) {
+                intervalMs = 100U;
+            } else if (intervalMs > 10000U) {
+                intervalMs = 10000U;
+            }
+            gContinuousSendIntervalMs = intervalMs;
+        }
+
+        gContinuousSendEnabled = true;
+        gHasLastContinuousData = false;
+        gLastContinuousCheckMs = 0U;
+
+        char payload[192] = {};
         std::snprintf(payload,
                       sizeof(payload),
-                      "{\"type\":\"radarData\",\"success\":true,\"deviceId\":%u,"
-                      "\"timestamp\":%" PRIu64 ",\"presence\":%u,\"heartRate\":%.1f,"
-                      "\"breathRate\":%.1f,\"motion\":%u,\"heartbeatWaveform\":%d,"
-                      "\"breathingWaveform\":%d,\"distance\":%u,\"bodyMovement\":%u,"
-                      "\"breathStatus\":%u,\"sleepState\":%u,\"sleepTime\":%u,"
-                      "\"sleepScore\":%u,\"avgHeartRate\":%u,\"avgBreathRate\":%u,"
-                      "\"abnormalState\":%u,\"heartValid\":%u,\"breathValid\":%u}",
-                      (unsigned)identity.device_id,
-                      nowMs,
-                      (unsigned)currentData.presence,
-                      currentData.heart_rate,
-                      currentData.breath_rate,
-                      (unsigned)currentData.motion,
-                      currentData.heartbeat_waveform,
-                      currentData.breathing_waveform,
-                      (unsigned)currentData.distance,
-                      (unsigned)currentData.body_movement,
-                      (unsigned)currentData.breath_status,
-                      (unsigned)currentData.sleep_state,
-                      (unsigned)currentData.sleep_time,
-                      (unsigned)currentData.sleep_score,
-                      (unsigned)currentData.avg_heart_rate,
-                      (unsigned)currentData.avg_breath_rate,
-                      (unsigned)currentData.abnormal_state,
-                      (unsigned)currentData.heart_valid,
-                      (unsigned)currentData.breath_valid);
+                      "{\"type\":\"startContinuousSendResult\",\"success\":true,"
+                      "\"message\":\"\\u5df2\\u542f\\u52a8\\u6301\\u7eed\\u53d1\\u9001\\u6a21\\u5f0f\","
+                      "\"interval\":%u}",
+                      (unsigned)gContinuousSendIntervalMs);
+        (void)ble_manager_send_text(payload);
+        return;
+    }
+
+    if (std::strcmp(command, "stopContinuousSend") == 0) {
+        gContinuousSendEnabled = false;
+        char payload[160] = {};
+        std::snprintf(payload,
+                      sizeof(payload),
+                      "{\"type\":\"stopContinuousSendResult\",\"success\":true,"
+                      "\"message\":\"\\u5df2\\u505c\\u6b62\\u6301\\u7eed\\u53d1\\u9001\\u6a21\\u5f0f\"}");
+        (void)ble_manager_send_text(payload);
+        return;
+    }
+
+    if (std::strcmp(command, "scanWiFi") == 0) {
+        WiFiScanRecord scanRecords[16] = {};
+        const uint32_t count = wifi_manager_scan_networks(scanRecords, 16U);
+
+        static char payload[3072] = {};
+        size_t used = std::snprintf(payload,
+                                    sizeof(payload),
+                                    "{\"type\":\"scanWiFiResult\",\"success\":true,\"count\":%u,\"networks\":[",
+                                    (unsigned)count);
+
+        for (uint32_t i = 0; i < count && used < sizeof(payload); ++i) {
+            const bool saved = wifi_manager_has_saved_network(scanRecords[i].ssid);
+            char escapedSsid[80] = {};
+            char escapedEncryption[40] = {};
+            json_escape_string(scanRecords[i].ssid, escapedSsid, sizeof(escapedSsid));
+            json_escape_string(scanRecords[i].encryption,
+                               escapedEncryption,
+                               sizeof(escapedEncryption));
+            const int written = std::snprintf(payload + used,
+                                              sizeof(payload) - used,
+                                              "%s{\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,"
+                                              "\"encryption\":\"%s\",\"saved\":%s}",
+                                              i == 0U ? "" : ",",
+                                              escapedSsid,
+                                              (int)scanRecords[i].rssi,
+                                              (unsigned)scanRecords[i].channel,
+                                              escapedEncryption,
+                                              saved ? "true" : "false");
+            if (written <= 0) {
+                break;
+            }
+            used += static_cast<size_t>(written);
+        }
+
+        if (used < sizeof(payload)) {
+            std::snprintf(payload + used, sizeof(payload) - used, "]}");
+        } else {
+            payload[sizeof(payload) - 2U] = ']';
+            payload[sizeof(payload) - 1U] = '\0';
+        }
+
+        (void)ble_manager_send_text(payload);
+        return;
+    }
+
+    if (std::strcmp(command, "getSavedNetworks") == 0) {
+        WiFiSavedNetwork savedNetworks[10] = {};
+        const uint32_t count = wifi_manager_get_saved_networks(savedNetworks, 10U);
+
+        static char payload[1024] = {};
+        size_t used = std::snprintf(payload,
+                                    sizeof(payload),
+                                    "{\"type\":\"savedNetworks\",\"success\":true,\"count\":%u,\"networks\":[",
+                                    (unsigned)count);
+
+        for (uint32_t i = 0; i < count && used < sizeof(payload); ++i) {
+            char escapedSsid[80] = {};
+            json_escape_string(savedNetworks[i].ssid, escapedSsid, sizeof(escapedSsid));
+            const int written = std::snprintf(payload + used,
+                                              sizeof(payload) - used,
+                                              "%s{\"ssid\":\"%s\"}",
+                                              i == 0U ? "" : ",",
+                                              escapedSsid);
+            if (written <= 0) {
+                break;
+            }
+            used += static_cast<size_t>(written);
+        }
+
+        if (used < sizeof(payload)) {
+            std::snprintf(payload + used, sizeof(payload) - used, "]}");
+        } else {
+            payload[sizeof(payload) - 2U] = ']';
+            payload[sizeof(payload) - 1U] = '\0';
+        }
+
         (void)ble_manager_send_text(payload);
         return;
     }
 
     (void)ble_manager_send_text("{\"type\":\"error\",\"message\":\"unknown command\"}");
+}
+
+void tasks_manager_set_continuous_send(bool enabled, unsigned long interval_ms)
+{
+    uint32_t clampedInterval = static_cast<uint32_t>(interval_ms);
+    if (clampedInterval < 100U) {
+        clampedInterval = 100U;
+    } else if (clampedInterval > 10000U) {
+        clampedInterval = 10000U;
+    }
+
+    gContinuousSendEnabled = enabled;
+    gContinuousSendIntervalMs = clampedInterval;
+    gHasLastContinuousData = false;
+    gLastContinuousCheckMs = 0U;
+}
+
+bool tasks_manager_get_continuous_send_enabled(void)
+{
+    return gContinuousSendEnabled;
+}
+
+unsigned long tasks_manager_get_continuous_send_interval_ms(void)
+{
+    return static_cast<unsigned long>(gContinuousSendIntervalMs);
 }
 
 void bootButtonMonitorTask(void *parameter)
@@ -411,8 +973,10 @@ void bootButtonMonitorTask(void *parameter)
     bool buttonPressed = false;
 
     ESP_LOGI(TAG, "boot button monitor task started");
+    task_watchdog_register_current("boot_button_task");
 
     while (true) {
+        task_watchdog_reset_current();
         const int buttonLevel = gpio_get_level((gpio_num_t)APP_BOOT_BUTTON_PIN);
 
         if (buttonLevel == 0 && !buttonPressed) {
@@ -455,8 +1019,10 @@ void ledControlTask(void *parameter)
     gLastBlinkTimeMs = radar_now_ms();
 
     ESP_LOGI(TAG, "network led control task started");
+    task_watchdog_register_current("led_control_task");
 
     while (true) {
+        task_watchdog_reset_current();
         const uint64_t nowMs = radar_now_ms();
 
         if (gForceLedOff) {
@@ -533,6 +1099,7 @@ void wifiMonitorTask(void *parameter)
         case WIFI_MANAGER_CONNECTED:
             setNetworkStatus(NET_CONNECTED);
             break;
+        case WIFI_MANAGER_SCANNING:
         case WIFI_MANAGER_CONNECTING:
         case WIFI_MANAGER_CONFIGURING:
             setNetworkStatus(NET_CONNECTING);
@@ -572,8 +1139,10 @@ void bleConfigTask(void *parameter)
     }
 
     sendStatusToBLE();
+    task_watchdog_register_current("ble_config_task");
 
     while (true) {
+        task_watchdog_reset_current();
         processBLEConfig();
 
         const BleManagerSnapshot bleSnapshot = ble_manager_get_snapshot();
@@ -586,12 +1155,24 @@ void bleConfigTask(void *parameter)
         static uint8_t lastNotifyEnabled = 0U;
         if (bleSnapshot.connected != lastConnected ||
             bleSnapshot.notify_enabled != lastNotifyEnabled) {
+            if (lastConnected != 0U && bleSnapshot.connected == 0U) {
+                gContinuousSendEnabled = false;
+            }
             lastConnected = bleSnapshot.connected;
             lastNotifyEnabled = bleSnapshot.notify_enabled;
             sendStatusToBLE();
         }
 
-        radar_sleep_ms(1000);
+        if (gContinuousSendEnabled && ble_manager_is_client_connected()) {
+            const uint64_t nowMs = radar_now_ms();
+            if (gLastContinuousCheckMs == 0U ||
+                (nowMs - gLastContinuousCheckMs) >= gContinuousSendIntervalMs) {
+                gLastContinuousCheckMs = nowMs;
+                (void)send_continuous_radar_packet_to_ble();
+            }
+        }
+
+        radar_sleep_ms(10);
     }
 }
 
@@ -611,8 +1192,10 @@ static void radar_command_task(void *parameter)
     };
 
     size_t commandIndex = 0;
+    task_watchdog_register_current("radar_command_task");
 
     while (true) {
+        task_watchdog_reset_current();
         const uint8_t *command = radarCommands[commandIndex];
         sendRadarCommand(command[0], command[1], command[2]);
 
@@ -624,8 +1207,10 @@ static void radar_command_task(void *parameter)
 static void radar_status_task(void *parameter)
 {
     (void)parameter;
+    task_watchdog_register_current("radar_status_task");
 
     while (true) {
+        task_watchdog_reset_current();
         const RadarReportSnapshot snapshot = radar_manager_get_report_snapshot(10000);
         const RadarChangeFlags changeFlags = radar_manager_get_change_flags();
         const SystemStateSnapshot systemState = system_state_get_snapshot();
@@ -689,10 +1274,80 @@ static void radar_status_task(void *parameter)
                      changeFlags.abnormal_state_changed);
 
             if (mqtt_manager_is_connected()) {
-                (void)mqtt_manager_publish_radar_snapshot(&snapshot);
+                const bool published = mqtt_manager_publish_radar_snapshot(&snapshot);
+                const bool isNoOne = snapshot.presence == 0U ||
+                                     (snapshot.heart_rate == 0.0f && snapshot.breath_rate == 0.0f);
+                if (published) {
+                    if (isNoOne) {
+                        gLastMqttHeartbeatMs = radar_now_ms();
+                    } else {
+                        gLastMqttDailySendMs = radar_now_ms();
+                    }
+                }
             }
 
             radar_manager_mark_snapshot_consumed();
+        }
+
+        const uint64_t nowMs = radar_now_ms();
+        const bool isMqttNoOne = snapshot.presence == 0U ||
+                                 (snapshot.heart_rate == 0.0f && snapshot.breath_rate == 0.0f);
+        if (mqtt_manager_is_connected() &&
+            isMqttNoOne &&
+            (gLastMqttHeartbeatMs == 0U ||
+             (nowMs - gLastMqttHeartbeatMs) >= kMqttHeartbeatIntervalMs)) {
+            task_watchdog_reset_current();
+            if (mqtt_manager_publish_online()) {
+                gLastMqttHeartbeatMs = radar_now_ms();
+            }
+            task_watchdog_reset_current();
+        }
+
+        if (mqtt_manager_is_connected() &&
+            !isMqttNoOne &&
+            (gLastMqttDailySendMs == 0U ||
+             (nowMs - gLastMqttDailySendMs) >= kMqttDailyDataIntervalMs)) {
+            task_watchdog_reset_current();
+            if (mqtt_manager_publish_radar_snapshot(&snapshot)) {
+                gLastMqttDailySendMs = radar_now_ms();
+            }
+            task_watchdog_reset_current();
+        }
+
+        if (mqtt_manager_is_connected() &&
+            !isMqttNoOne &&
+            (gLastMqttSleepSendMs == 0U ||
+             (nowMs - gLastMqttSleepSendMs) >= kMqttSleepDataIntervalMs)) {
+            task_watchdog_reset_current();
+            if (mqtt_manager_publish_sleep_snapshot(&snapshot)) {
+                gLastMqttSleepSendMs = radar_now_ms();
+            }
+            task_watchdog_reset_current();
+        }
+
+        const bool dailyChanged = influx_daily_snapshot_changed(snapshot);
+        const bool dailyForceDue = (gLastInfluxDailySendMs == 0U) ||
+                                   ((nowMs - gLastInfluxDailySendMs) >= kInfluxDailyForceSendIntervalMs);
+        const bool dailyMinElapsed = (gLastInfluxDailySendMs == 0U) ||
+                                     ((nowMs - gLastInfluxDailySendMs) >= kInfluxDailyMinSendIntervalMs);
+
+        if ((dailyChanged || dailyForceDue) && dailyMinElapsed) {
+            task_watchdog_reset_current();
+            if (influx_manager_send_daily_data(&snapshot)) {
+                gLastInfluxDailySnapshot = snapshot;
+                gHasLastInfluxDailySnapshot = true;
+                gLastInfluxDailySendMs = radar_now_ms();
+            }
+            task_watchdog_reset_current();
+        }
+
+        if (gLastInfluxSleepSendMs == 0U ||
+            (nowMs - gLastInfluxSleepSendMs) >= kInfluxSleepSendIntervalMs) {
+            const SensorData currentData = radar_manager_get_sensor_data();
+            task_watchdog_reset_current();
+            (void)influx_manager_send_sleep_data(&currentData);
+            gLastInfluxSleepSendMs = radar_now_ms();
+            task_watchdog_reset_current();
         }
 
         radar_sleep_ms(5000);
@@ -706,8 +1361,10 @@ static void radar_analysis_task(void *parameter)
     PhysioDataProcessor processor;
     SimpleEmotionAnalyzer emotionAnalyzer;
     SleepAnalyzer sleepAnalyzer;
+    task_watchdog_register_current("radar_analysis_task");
 
     while (true) {
+        task_watchdog_reset_current();
         const SensorData currentData = radar_manager_get_sensor_data();
         const bool hasVitalSample = (currentData.heart_valid != 0U) || (currentData.breath_valid != 0U);
         if (!hasVitalSample) {

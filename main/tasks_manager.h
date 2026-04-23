@@ -33,6 +33,9 @@ void wifiMonitorTask(void *parameter);
 void bleConfigTask(void *parameter);
 void sendStatusToBLE(void);
 void processBLEConfig(void);
+void tasks_manager_set_continuous_send(bool enabled, unsigned long interval_ms);
+bool tasks_manager_get_continuous_send_enabled(void);
+unsigned long tasks_manager_get_continuous_send_interval_ms(void);
 
 #ifdef __cplusplus
 }

@@ -91,12 +91,15 @@ bool radar_parse_frame(const uint8_t *frame, size_t frame_len)
         case 0x02:
             if (dataLen >= 1) {
                 sensorData.breath_rate = static_cast<float>(frame[6]);
-                sensorData.breath_valid = (sensorData.breath_rate >= 8.0f && sensorData.breath_rate <= 35.0f);
+                sensorData.breath_valid = (sensorData.breath_rate >= 0.0f && sensorData.breath_rate <= 35.0f);
             }
             break;
         case 0x05:
-            if (dataLen >= 1) {
-                sensorData.breathing_waveform = static_cast<int8_t>(frame[6] - 128);
+            if (dataLen >= 5) {
+                for (uint16_t i = 0; i < 5U && i < dataLen; ++i) {
+                    sensorData.breath_waveform[i] = static_cast<int8_t>(frame[6 + i] - 128);
+                }
+                sensorData.breathing_waveform = sensorData.breath_waveform[0];
             }
             break;
         default:
@@ -109,12 +112,15 @@ bool radar_parse_frame(const uint8_t *frame, size_t frame_len)
         case 0x02:
             if (dataLen >= 1) {
                 sensorData.heart_rate = static_cast<float>(frame[6]);
-                sensorData.heart_valid = (sensorData.heart_rate >= 40.0f && sensorData.heart_rate <= 150.0f);
+                sensorData.heart_valid = (sensorData.heart_rate >= 60.0f && sensorData.heart_rate <= 120.0f);
             }
             break;
         case 0x05:
-            if (dataLen >= 1) {
-                sensorData.heartbeat_waveform = static_cast<int8_t>(frame[6] - 128);
+            if (dataLen >= 5) {
+                for (uint16_t i = 0; i < 5U && i < dataLen; ++i) {
+                    sensorData.heart_waveform[i] = static_cast<int8_t>(frame[6 + i] - 128);
+                }
+                sensorData.heartbeat_waveform = sensorData.heart_waveform[0];
             }
             break;
         default:
@@ -124,6 +130,41 @@ bool radar_parse_frame(const uint8_t *frame, size_t frame_len)
 
     case 0x84:
         switch (cmdByte) {
+        case 0x01:
+        case 0x81:
+            if (dataLen >= 1) {
+                sensorData.bed_status = frame[6];
+                sensorData.bed_entry = frame[6];
+            }
+            break;
+        case 0x03:
+        case 0x83:
+            if (dataLen >= 2) {
+                sensorData.awake_time = static_cast<uint16_t>((frame[6] << 8) | frame[7]);
+            }
+            break;
+        case 0x04:
+        case 0x84:
+            if (dataLen >= 2) {
+                sensorData.light_sleep_time = static_cast<uint16_t>((frame[6] << 8) | frame[7]);
+            }
+            break;
+        case 0x05:
+        case 0x85:
+            if (dataLen >= 2) {
+                sensorData.deep_sleep_time = static_cast<uint16_t>((frame[6] << 8) | frame[7]);
+            }
+            break;
+        case 0x06:
+            if (dataLen >= 1) {
+                sensorData.sleep_score = frame[6];
+            }
+            break;
+        case 0x86:
+            if (dataLen >= 2) {
+                sensorData.sleep_score = frame[6];
+            }
+            break;
         case 0x0C:
         case 0x8D:
             if (dataLen >= 8) {
@@ -131,13 +172,51 @@ bool radar_parse_frame(const uint8_t *frame, size_t frame_len)
                 sensorData.sleep_state = frame[7];
                 sensorData.avg_breath_rate = frame[8];
                 sensorData.avg_heart_rate = frame[9];
+                sensorData.turnover_count = frame[10];
+                sensorData.large_move_ratio = frame[11];
+                sensorData.small_move_ratio = frame[12];
+                sensorData.apnea_count = frame[13];
             }
             break;
         case 0x0D:
         case 0x8F:
             if (dataLen >= 12) {
                 sensorData.sleep_score = frame[6];
-                sensorData.sleep_time = static_cast<uint32_t>((frame[7] << 8) | frame[8]);
+                sensorData.sleep_total_time = static_cast<uint16_t>((frame[7] << 8) | frame[8]);
+                sensorData.sleep_time = sensorData.sleep_total_time;
+                sensorData.awake_ratio = frame[9];
+                sensorData.light_sleep_ratio = frame[10];
+                sensorData.deep_sleep_ratio = frame[11];
+                sensorData.bed_Out_Time = frame[12];
+                sensorData.turn_count = frame[13];
+                sensorData.turnover_count = frame[14];
+                sensorData.avg_breath_rate = frame[15];
+                sensorData.avg_heart_rate = frame[16];
+                sensorData.apnea_count = frame[17];
+            }
+            break;
+        case 0x0E:
+        case 0x8E:
+            if (dataLen >= 1) {
+                sensorData.abnormal_state = frame[6];
+            }
+            break;
+        case 0x10:
+        case 0x90:
+            if (dataLen >= 1) {
+                sensorData.sleep_grade = frame[6];
+            }
+            break;
+        case 0x11:
+        case 0x91:
+            if (dataLen >= 1) {
+                sensorData.struggle_alert = frame[6];
+            }
+            break;
+        case 0x12:
+        case 0x92:
+            if (dataLen >= 1) {
+                sensorData.no_one_alert = frame[6];
             }
             break;
         default:
@@ -150,6 +229,8 @@ bool radar_parse_frame(const uint8_t *frame, size_t frame_len)
     }
 
     sensorData.last_update_ms = radar_now_ms();
+    sensorData.heart_valid = (sensorData.heart_rate > 0.0f && sensorData.heart_rate < 200.0f);
+    sensorData.breath_valid = (sensorData.breath_rate >= 0.1f && sensorData.breath_rate <= 60.0f);
 
     ESP_LOGI(TAG,
              "sensor presence=%u motion=%u dist=%u hr=%.1f rr=%.1f sleep=%u body=%u updated=%" PRIu64,

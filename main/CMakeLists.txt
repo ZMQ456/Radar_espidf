@@ -6,6 +6,7 @@ idf_component_register(
         "device_command.cpp"
         "device_identity.cpp"
         "emotion_analyzer_simple.cpp"
+        "influx_manager.cpp"
         "main.cpp"
         "mqtt_manager.cpp"
         "radar_manager.cpp"
@@ -23,8 +24,11 @@ idf_component_register(
         esp_driver_ledc
         esp_driver_uart
         esp_event
+        esp_http_client
         mqtt
+        mbedtls
         esp_netif
+        esp_system
         esp_wifi
         nvs_flash
 )
