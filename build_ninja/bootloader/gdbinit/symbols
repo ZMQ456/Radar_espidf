@@ -1,0 +1,9 @@
+
+
+# Load bootloader symbols
+set confirm off
+    # Bootloader elf was not found
+set confirm on
+
+# Load application symbols
+file E:/ESP/SofeWare/espidf/hello_world/build_ninja/bootloader/bootloader.elf

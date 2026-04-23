@@ -1,0 +1,2 @@
+source E:/ESP/SofeWare/espidf/hello_world/build_ninja/bootloader/gdbinit/symbols
+source E:/ESP/SofeWare/espidf/hello_world/build_ninja/bootloader/gdbinit/connect

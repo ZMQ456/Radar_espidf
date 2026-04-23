@@ -1,0 +1,30 @@
+idf_component_register(
+    SRCS
+        "ble_manager.cpp"
+       
+        "data_processor.cpp"
+        "device_command.cpp"
+        "device_identity.cpp"
+        "emotion_analyzer_simple.cpp"
+        "main.cpp"
+        "mqtt_manager.cpp"
+        "radar_manager.cpp"
+        "radar_platform.c"
+        "radar_uart.cpp"
+        "sleep_analyzer.cpp"
+        "system_state.cpp"
+        "tasks_manager.cpp"
+        "wifi_manager.cpp"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        bt
+        esp_driver_gpio
+        esp_driver_ledc
+        esp_driver_uart
+        esp_event
+        mqtt
+        esp_netif
+        esp_wifi
+        nvs_flash
+)

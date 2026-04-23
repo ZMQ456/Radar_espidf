@@ -1,0 +1,49 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build_ninja/compile_commands.json",
+  "C_Cpp.default.compilerPath": "C:\\Users\\z1831\\.espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20240530\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
+  "cmake.configureOnOpen": false,
+  "cmake.cmakePath": "C:\\Users\\z1831\\.espressif\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
+  "cmake.generator": "Ninja",
+  "cmake.buildDirectory": "${workspaceFolder}/build_ninja",
+  "cmake.configureSettings": {
+    "CMAKE_BUILD_TYPE": "Debug",
+    "CMAKE_EXPORT_COMPILE_COMMANDS": true
+  },
+  "cmake.configureEnvironment": {
+    "IDF_PATH": "E:\\esp-32\\v5.3.4\\esp-idf",
+    "IDF_TARGET": "esp32s3",
+    "IDF_PYTHON_ENV_PATH": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env",
+    "ESP_ROM_ELF_DIR": "C:\\Users\\z1831\\.espressif\\tools\\esp-rom-elfs\\20240305",
+    "PATH": "C:\\Users\\z1831\\.espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20240530\\xtensa-esp-elf\\bin;C:\\Users\\z1831\\.espressif\\tools\\cmake\\3.30.2\\bin;C:\\Users\\z1831\\.espressif\\tools\\ninja\\1.12.1;C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env\\Scripts;${env:PATH}"
+  },
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+  "idf.portWin": "COM14",
+  "idf.baudRate": 460800,
+  "idf.monitorBaudRate": "115200",
+  "idf.currentSetup": "E:\\esp-32\\v5.3.4\\esp-idf",
+  "idf.pythonBinPathWin": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env\\Scripts\\python.exe",
+  "idf.buildPath": "${workspaceFolder}/build_ninja",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3",
+    "IDF_PATH": "E:\\esp-32\\v5.3.4\\esp-idf",
+    "IDF_PYTHON_ENV_PATH": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env",
+    "ESP_ROM_ELF_DIR": "C:\\Users\\z1831\\.espressif\\tools\\esp-rom-elfs\\20240305"
+  },
+  "terminal.integrated.env.windows": {
+    "IDF_PATH": "E:\\esp-32\\v5.3.4\\esp-idf",
+    "IDF_TARGET": "esp32s3",
+    "IDF_PYTHON_ENV_PATH": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env",
+    "ESP_ROM_ELF_DIR": "C:\\Users\\z1831\\.espressif\\tools\\esp-rom-elfs\\20240305",
+    "PATH": "C:\\Users\\z1831\\.espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20240530\\xtensa-esp-elf\\bin;C:\\Users\\z1831\\.espressif\\tools\\cmake\\3.30.2\\bin;C:\\Users\\z1831\\.espressif\\tools\\ninja\\1.12.1;${env:PATH}"
+  },
+  "clangd.path": "C:\\Users\\z1831\\.espressif\\tools\\esp-clang\\16.0.1-fe4f10a809\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=e:\\ESP\\SofeWare\\espidf\\hello_world\\build_ninja"
+  ],
+  "idf.flashType": "UART"
+}

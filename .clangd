@@ -1,0 +1,4 @@
+CompilationDatabase: build_ninja
+
+CompileFlags:
+    Remove: [-f*, -m*]
