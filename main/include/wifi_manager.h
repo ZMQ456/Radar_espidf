@@ -44,6 +44,7 @@ typedef struct {
 bool wifi_manager_init(void);
 bool wifi_manager_is_initialized(void);
 bool wifi_manager_is_connected(void);
+bool wifi_manager_is_connecting(void);  // 返回 WiFi 是否正在连接中
 WiFiManagerState wifi_manager_get_state(void);
 WiFiManagerSnapshot wifi_manager_get_snapshot(void);
 void wifi_manager_set_credentials_present(uint8_t present);

@@ -1,23 +1,23 @@
 idf_component_register(
     SRCS
-        "ble_manager.cpp"
-       
-        "data_processor.cpp"
-        "device_command.cpp"
-        "device_identity.cpp"
-        "emotion_analyzer_simple.cpp"
-        "influx_manager.cpp"
-        "main.cpp"
-        "mqtt_manager.cpp"
-        "radar_manager.cpp"
-        "radar_platform.c"
-        "radar_uart.cpp"
-        "sleep_analyzer.cpp"
-        "system_state.cpp"
-        "tasks_manager.cpp"
-        "wifi_manager.cpp"
+        "scr/ble_manager.cpp"
+        "scr/data_processor.cpp"
+        "scr/device_command.cpp"
+        "scr/device_identity.cpp"
+        "scr/emotion_analyzer_simple.cpp"
+        "scr/influx_manager.cpp"
+        "scr/main.cpp"
+        "scr/mqtt_manager.cpp"
+        "scr/radar_manager.cpp"
+        "scr/radar_platform.c"
+        "scr/radar_uart.cpp"
+        "scr/sleep_analyzer.cpp"
+        "scr/system_state.cpp"
+        "scr/tasks_manager.cpp"
+        "scr/wifi_manager.cpp"
     INCLUDE_DIRS
         "."
+        "include"
     REQUIRES
         bt
         esp_driver_gpio

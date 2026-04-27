@@ -1,38 +1,130 @@
-#include "mqtt_manager.h"
+/**
+ * @file mqtt_manager.cpp
+ * @brief MQTT 客户端管理模块（阿里云物联网平台）
+ * 
+ * 功能概述：
+ * - 实现与阿里云物联网平台的 MQTT 连接和通信
+ * - 支持设备属性上报（心跳、日常数据、睡眠数据）
+ * - 支持云端指令下行处理（设置参数、查询状态）
+ * - 自动重连机制和状态管理
+ * 
+ * 核心特性：
+ * 1. 鉴权认证：基于 ProductKey、DeviceName、Password 三元组
+ * 2. 自动生成：DeviceName 使用 device_sn，Password 使用 MD5 签名
+ * 3. 话题管理：自动构建订阅和发布话题
+ * 4. JSON 解析：内置轻量级 JSON 解析器（支持转义、Unicode）
+ * 5. 失败处理：独立重连任务，不阻塞主线程
+ * 
+ * MQTT 连接参数：
+ * - ProductKey: dEkr5BkkXTFZFBdR
+ * - DeviceModel: radar_1.0
+ * - ClientID: {ProductKey}_{DeviceName}_{DeviceModel}
+ * - Username: {DeviceName}
+ * - Password: MD5({ProductSecret} + {ClientID})
+ * 
+ * 话题格式：
+ * - 订阅：/sys/{ProductKey}/{DeviceName}/c/#
+ * - 发布：/sys/{ProductKey}/{DeviceName}/s/event/property/post
+ * 
+ * 支持的下行方法：
+ * - thing.service.property.set: 设置设备参数
+ * - thing.service.property.get: 查询设备状态
+ */
+// ============================================================================
+// 头文件包含和全局变量
+// ============================================================================
+#include "mqtt_manager.h"  // MQTT 管理器接口声明
 
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <cstdio>         // C 标准输入输出（snprintf, sprintf）
+#include <cstdlib>        // C 标准库（strtoul）
+#include <cstring>        // C 字符串操作（strlen, strncpy）
 
-#include "device_identity.h"
-#include "esp_err.h"
-#include "esp_event.h"
-#include "esp_log.h"
-#include "mbedtls/md5.h"
-#include "mqtt_client.h"
-#include "radar_platform.h"
-#include "system_state.h"
-#include "tasks_manager.h"
-#include "wifi_manager.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "device_identity.h"  // 设备身份（获取 device_sn）
+#include "esp_err.h"          // ESP32 错误码定义
+#include "esp_event.h"        // ESP32 事件循环
+#include "esp_log.h"          // ESP32 日志系统
+#include "mbedtls/md5.h"      // MD5 哈希算法（生成密码）
+#include "mqtt_client.h"      // ESP MQTT 客户端
+#include "radar_platform.h"   // 平台接口（radar_now_ms, radar_sleep_ms）
+#include "system_state.h"     // 系统状态管理
+#include "tasks_manager.h"    // 任务管理器（连续发送配置）
+#include "wifi_manager.h"     // WiFi 管理器（检查连接状态）
+#include "freertos/FreeRTOS.h" // FreeRTOS 接口
+#include "freertos/task.h"     // FreeRTOS 任务管理
 
-static const char *TAG = "mqtt_manager";
+static const char *TAG = "mqtt_manager";  // 日志标签
+
+// 全局 MQTT 状态快照
 static MqttManagerSnapshot gMqttState = {};
+
+// MQTT 客户端句柄
 static esp_mqtt_client_handle_t gMqttClient = nullptr;
+
+// MQTT 连接任务句柄
 static TaskHandle_t gMqttConnectTaskHandle = nullptr;
+
+// MQTT 消息 ID 计数器（用于请求 - 响应匹配）
 static uint32_t gMqttMessageId = 1U;
-static char gMqttDeviceName[32] = {};
-static char gMqttUsername[32] = {};
-static char gMqttPassword[33] = {};
-static char gMqttSubscribeTopic[128] = {};
-static char gMqttPropertyPostTopic[128] = {};
 
-static constexpr uint32_t MQTT_RECONNECT_INTERVAL_MS = 5000;
-static constexpr const char *MQTT_PRODUCT_KEY = "dEkr5BkkXTFZFBdR";
-static constexpr const char *MQTT_DEVICE_MODEL = "radar_1.0";
-static constexpr const char *MQTT_PRODUCT_SECRET = "2e7957febfcb48b08a1c69b8deb56738";
+// 鉴权三元组缓冲区
+static char gMqttDeviceName[32] = {};           // DeviceName
+static char gMqttUsername[32] = {};             // Username
+static char gMqttPassword[33] = {};             // Password (32 字符 + '\0')
+static char gMqttSubscribeTopic[128] = {};      // 订阅话题
+static char gMqttPropertyPostTopic[128] = {};   // 发布话题
 
+// ============================================================================
+// 鉴权和身份管理函数
+// ============================================================================
+/**
+ * @brief 生成 payload 中使用的 deviceId（使用 device_sn）
+ * 
+ * @param buffer 输出缓冲区
+ * @param buffer_size 缓冲区大小
+ * 
+ * 用途：
+ * - MQTT payload 中的 deviceId 字段
+ * - 使用 device_sn（64 位）而不是 device_id（16 位）
+ * - 和 Arduino 版本保持一致
+ * 
+ * 格式：
+ * - 直接输出 device_sn 的十进制字符串
+ * - 例："1234567890123456789"
+ */
+static void mqtt_manager_make_payload_device_id(char *buffer, size_t buffer_size)
+{
+    if (buffer == nullptr || buffer_size == 0U) {
+        return;
+    }
+
+    const DeviceIdentity identity = device_identity_get();
+    std::snprintf(buffer,
+                  buffer_size,
+                  "%llu",
+                  static_cast<unsigned long long>(identity.device_sn));
+}
+
+// MQTT 连接常量
+static constexpr uint32_t MQTT_RECONNECT_INTERVAL_MS = 5000;      // 重连间隔（5 秒）
+static constexpr const char *MQTT_PRODUCT_KEY = "dEkr5BkkXTFZFBdR";     // 阿里云 ProductKey
+static constexpr const char *MQTT_DEVICE_MODEL = "radar_1.0";           // 设备型号
+static constexpr const char *MQTT_PRODUCT_SECRET = "2e7957febfcb48b08a1c69b8deb56738";  // 阿里云 ProductSecret
+
+/**
+ * @brief 生成 MQTT DeviceName
+ * 
+ * @param buffer 输出缓冲区
+ * @param buffer_size 缓冲区大小
+ * 
+ * 生成规则：
+ * 1. 优先使用 device_sn（如果非 0）
+ * 2. 如果 device_sn 为 0，使用 MAC 地址（去除冒号）
+ * 3. 如果 MAC 获取失败，使用 "unknown"
+ * 
+ * 示例：
+ * - device_sn=123456 → "123456"
+ * - MAC="AA:BB:CC:DD:EE:FF" → "AABBCCDDEEFF"
+ */
 static void mqtt_manager_make_device_name(char *buffer, size_t buffer_size)
 {
     if (buffer == nullptr || buffer_size == 0U) {
@@ -40,6 +132,8 @@ static void mqtt_manager_make_device_name(char *buffer, size_t buffer_size)
     }
 
     const DeviceIdentity identity = device_identity_get();
+    
+    // 规则 1: 优先使用 device_sn
     if (identity.device_sn != 0ULL) {
         std::snprintf(buffer,
                       buffer_size,
@@ -48,13 +142,16 @@ static void mqtt_manager_make_device_name(char *buffer, size_t buffer_size)
         return;
     }
 
+    // 规则 2: 使用 MAC 地址
     char mac[24] = {};
     if (!radar_manager_get_device_mac(mac, sizeof(mac))) {
+        // 规则 3: MAC 获取失败，使用 "unknown"
         std::strncpy(buffer, "unknown", buffer_size - 1U);
         buffer[buffer_size - 1U] = '\0';
         return;
     }
 
+    // 去除 MAC 地址中的冒号
     size_t out = 0U;
     for (size_t i = 0U; mac[i] != '\0' && out < buffer_size - 1U; ++i) {
         if (mac[i] != ':') {
@@ -64,15 +161,39 @@ static void mqtt_manager_make_device_name(char *buffer, size_t buffer_size)
     buffer[out] = '\0';
 }
 
+/**
+ * @brief 生成 MQTT Password（MD5 签名）
+ * 
+ * @param client_id MQTT ClientID
+ * @param buffer 输出缓冲区（至少 33 字节）
+ * @param buffer_size 缓冲区大小
+ * 
+ * 算法：
+ * 1. 拼接字符串：raw = ProductSecret + ClientID
+ * 2. 计算 MD5：password = MD5(raw)
+ * 3. 转换为十六进制字符串（32 字符）
+ * 
+ * 示例：
+ * - ProductSecret: "2e7957febfcb48b08a1c69b8deb56738"
+ * - ClientID: "dEkr5BkkXTFZFBdR_123456_radar_1.0"
+ * - raw: "2e7957febfcb48b08a1c69b8deb56738dEkr5BkkXTFZFBdR_123456_radar_1.0"
+ * - password: "a1b2c3d4e5f6..." (32 字符十六进制)
+ * 
+ * 注意：
+ * - 这是阿里云物联网平台的鉴权方式
+ * - ClientID 必须与连接时使用的完全一致
+ */
 static void mqtt_manager_make_password(const char *client_id, char *buffer, size_t buffer_size)
 {
     if (client_id == nullptr || buffer == nullptr || buffer_size < 33U) {
         return;
     }
 
+    // 步骤 1: 拼接字符串
     char raw[160] = {};
     std::snprintf(raw, sizeof(raw), "%s%s", MQTT_PRODUCT_SECRET, client_id);
 
+    // 步骤 2: 计算 MD5
     unsigned char digest[16] = {};
     mbedtls_md5_context ctx;
     mbedtls_md5_init(&ctx);
@@ -83,18 +204,41 @@ static void mqtt_manager_make_password(const char *client_id, char *buffer, size
     (void)mbedtls_md5_finish(&ctx, digest);
     mbedtls_md5_free(&ctx);
 
+    // 步骤 3: 转换为十六进制字符串
     for (size_t i = 0U; i < sizeof(digest); ++i) {
         std::snprintf(buffer + (i * 2U), buffer_size - (i * 2U), "%02x", digest[i]);
     }
-    buffer[32] = '\0';
+    buffer[32] = '\0';  // 确保字符串结束
 }
 
+/**
+ * @brief 刷新 MQTT 鉴权身份（DeviceName、Username、Password、Topics）
+ * 
+ * 处理流程：
+ * 1. 生成 DeviceName（调用 mqtt_manager_make_device_name）
+ * 2. 设置 Username = DeviceName
+ * 3. 生成 ClientID = ProductKey_DeviceName_DeviceModel
+ * 4. 生成 Password = MD5(ProductSecret + ClientID)
+ * 5. 构建订阅话题：/sys/{ProductKey}/{DeviceName}/c/#
+ * 6. 构建发布话题：/sys/{ProductKey}/{DeviceName}/s/event/property/post
+ * 7. 复制发布话题到 test_topic（用于调试）
+ * 
+ * 示例输出：
+ * - DeviceName: "123456"
+ * - Username: "123456"
+ * - ClientID: "dEkr5BkkXTFZFBdR_123456_radar_1.0"
+ * - Password: "a1b2c3d4e5f6..."
+ * - Subscribe: "/sys/dEkr5BkkXTFZFBdR/123456/c/#"
+ * - Publish: "/sys/dEkr5BkkXTFZFBdR/123456/s/event/property/post"
+ */
 static void mqtt_manager_refresh_enjoy_iot_identity(void)
 {
+    // 步骤 1-2: 生成 DeviceName 和 Username
     mqtt_manager_make_device_name(gMqttDeviceName, sizeof(gMqttDeviceName));
     std::strncpy(gMqttUsername, gMqttDeviceName, sizeof(gMqttUsername) - 1U);
     gMqttUsername[sizeof(gMqttUsername) - 1U] = '\0';
 
+    // 步骤 3: 生成 ClientID
     std::snprintf(gMqttState.client_id,
                   sizeof(gMqttState.client_id),
                   "%s_%s_%s",
@@ -102,8 +246,10 @@ static void mqtt_manager_refresh_enjoy_iot_identity(void)
                   gMqttDeviceName,
                   MQTT_DEVICE_MODEL);
 
+    // 步骤 4: 生成 Password
     mqtt_manager_make_password(gMqttState.client_id, gMqttPassword, sizeof(gMqttPassword));
 
+    // 步骤 5-6: 构建话题
     std::snprintf(gMqttSubscribeTopic,
                   sizeof(gMqttSubscribeTopic),
                   "/sys/%s/%s/c/#",
@@ -115,18 +261,43 @@ static void mqtt_manager_refresh_enjoy_iot_identity(void)
                   MQTT_PRODUCT_KEY,
                   gMqttDeviceName);
 
+    // 步骤 7: 复制到 test_topic
     std::strncpy(gMqttState.test_topic,
                  gMqttPropertyPostTopic,
                  sizeof(gMqttState.test_topic) - 1U);
     gMqttState.test_topic[sizeof(gMqttState.test_topic) - 1U] = '\0';
 }
 
+// ============================================================================
+// JSON 解析辅助函数
+// ============================================================================
+/**
+ * @brief 查找 JSON 中某个 key 的 value 起始位置
+ * 
+ * @param json JSON 字符串
+ * @param key 要查找的 key
+ * @return const char* value 的起始位置，失败返回 nullptr
+ * 
+ * 查找过程：
+ * 1. 查找 "key" 的位置
+ * 2. 找到后面的冒号 :
+ * 3. 跳过空白字符（空格、制表符、换行）
+ * 4. 返回 value 的起始位置
+ * 
+ * 示例：
+ * @code
+ * json = {"method":"set","id":"123"}
+ * key = "method"
+ * 返回指向 "set" 的指针（包括引号）
+ * @endcode
+ */
 static const char *json_find_value_start(const char *json, const char *key)
 {
     if (json == nullptr || key == nullptr) {
         return nullptr;
     }
 
+    // 步骤 1: 构造 "key" 模式并查找
     char pattern[48] = {};
     std::snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     const char *keyPos = std::strstr(json, pattern);
@@ -134,16 +305,43 @@ static const char *json_find_value_start(const char *json, const char *key)
         return nullptr;
     }
 
+    // 步骤 2: 找到冒号
     const char *colonPos = std::strchr(keyPos + std::strlen(pattern), ':');
     if (colonPos == nullptr) {
         return nullptr;
     }
 
+    // 步骤 3: 跳过空白字符
     const char *valuePos = colonPos + 1;
     while (*valuePos == ' ' || *valuePos == '\t' || *valuePos == '\r' || *valuePos == '\n') {
         ++valuePos;
     }
-    return valuePos;
+    return valuePos;  // 步骤 4: 返回 value 起始位置
+}
+
+// 从 payload 中找到 params 对象的起始位置
+static const char *json_find_params_object(const char *json)
+{
+    if (json == nullptr) {
+        return nullptr;
+    }
+
+    const char *paramsPos = std::strstr(json, "\"params\"");
+    if (paramsPos == nullptr) {
+        return nullptr;
+    }
+
+    const char *colonPos = std::strchr(paramsPos + 8, ':');
+    if (colonPos == nullptr) {
+        return nullptr;
+    }
+
+    const char *bracePos = std::strchr(colonPos + 1, '{');
+    if (bracePos == nullptr) {
+        return nullptr;
+    }
+
+    return bracePos;
 }
 
 static int json_hex_nibble(char c)
@@ -335,23 +533,85 @@ static bool mqtt_manager_publish_reply(const char *request_topic,
     return mqtt_manager_publish_text(replyTopic, payload, 1, 0);
 }
 
+/**
+ * @brief 处理 MQTT 下行消息
+ * 
+ * @param topic MQTT 主题
+ * @param payload MQTT 消息内容
+ * 
+ * 功能说明：
+ * - 解析下行消息的 method 和 id
+ * - 根据 method 类型分发处理
+ * - 支持平台回执消息（_reply）
+ * 
+ * 支持的下行方法（5 类）：
+ * 
+ * 1. thing.service.property.set
+ *    - 功能：设置设备参数
+ *    - 参数：continuousSendEnabled, continuousSendInterval
+ *    - 响应：回复 success:true
+ * 
+ * 2. thing.service.property.get
+ *    - 功能：查询设备状态
+ *    - 响应：回复当前传感器数据（心率、呼吸率、存在等）
+ * 
+ * 3. thing.service.*（其他服务）
+ *    - 功能：其他服务调用
+ *    - 响应：回复 success:true（通用响应）
+ * 
+ * 4. *_reply（平台回执）
+ *    - 功能：平台对上报数据的确认
+ *    - 类型：thing.event.property.post_reply 等
+ *    - 处理：仅记录日志，不回复
+ *    - 判断：method 包含 "_reply" 字符串
+ * 
+ * 5. 不支持的方法
+ *    - 处理：打印警告日志
+ * 
+ * 处理流程：
+ * 1. 提取 method 和 id 字段
+ * 2. 判断 method 类型
+ * 3. 执行对应处理逻辑
+ * 4. 回复或记录日志
+ * 
+ * 注意：
+ * - reply 消息不需要回复
+ * - 仅看 code==0 确认上报成功即可
+ * - 避免将 reply 误判为 unsupported
+ */
 static void mqtt_manager_handle_downlink(const char *topic, const char *payload)
 {
+    // 步骤 1: 提取 method 和 id 字段
     char method[64] = {};
     char id[32] = {};
     (void)json_extract_string(payload, "method", method, sizeof(method));
     (void)json_extract_string(payload, "id", id, sizeof(id));
 
+    // 类型 4: 平台回执消息（_reply）
+    // 处理 thing.event.property.post_reply 等回执消息
+    if (std::strstr(method, "_reply") != nullptr) {
+        ESP_LOGI(TAG, "mqtt reply received method=%s", method);
+        return;  // 回执消息不需要处理，直接返回
+    }
+
+    // 类型 1: thing.service.property.set
     if (std::strcmp(method, "thing.service.property.set") == 0) {
         bool enabled = tasks_manager_get_continuous_send_enabled();
         unsigned long interval = tasks_manager_get_continuous_send_interval_ms();
-        (void)json_extract_bool(payload, "continuousSendEnabled", &enabled);
-        (void)json_extract_ulong(payload, "continuousSendInterval", &interval);
+        
+        // 从 params 对象中读取字段（和 Arduino 一致）
+        const char *paramsStart = json_find_params_object(payload);
+        if (paramsStart != nullptr) {
+            (void)json_extract_bool(paramsStart, "continuousSendEnabled", &enabled);
+            (void)json_extract_ulong(paramsStart, "continuousSendInterval", &interval);
+        }
+        
         tasks_manager_set_continuous_send(enabled, interval);
         (void)mqtt_manager_publish_reply(topic, id, method, 0, "{\"success\":true}");
         return;
     }
 
+    // 类型 2: thing.service.property.get
     if (std::strcmp(method, "thing.service.property.get") == 0) {
         const SensorData data = radar_manager_get_sensor_data();
         char params[384] = {};
@@ -373,11 +633,13 @@ static void mqtt_manager_handle_downlink(const char *topic, const char *payload)
         return;
     }
 
+    // 类型 3: thing.service.*（其他服务）
     if (std::strncmp(method, "thing.service.", 14) == 0) {
         (void)mqtt_manager_publish_reply(topic, id, method, 0, "{\"success\":true}");
         return;
     }
 
+    // 类型 5: 不支持的方法
     ESP_LOGW(TAG, "unsupported mqtt method=%s", method);
 }
 
@@ -444,6 +706,16 @@ static void mqtt_connect_task(void *parameter)
     (void)parameter;
 
     while (true) {
+        // 安全清理：在错误/断开状态下回收 client 实例
+        if (gMqttClient != nullptr &&
+            (gMqttState.state == MQTT_MANAGER_ERROR ||
+             gMqttState.state == MQTT_MANAGER_DISCONNECTED) &&
+            gMqttState.connected == 0U) {
+            ESP_LOGI(TAG, "mqtt client recycle state=%d", (int)gMqttState.state);
+            esp_mqtt_client_destroy(gMqttClient);
+            gMqttClient = nullptr;
+        }
+
         const bool shouldConnect =
             gMqttState.initialized != 0U &&
             gMqttState.configured != 0U &&
@@ -544,6 +816,12 @@ bool mqtt_manager_configure(const char *uri, const char *client_id)
              gMqttUsername,
              gMqttSubscribeTopic,
              gMqttPropertyPostTopic);
+    // 打印完整鉴权三元组，用于和 Arduino 版逐字符对比
+    ESP_LOGI(TAG,
+             "mqtt auth client_id=%s username=%s password=%s",
+             gMqttState.client_id,
+             gMqttUsername,
+             gMqttPassword);
     return true;
 }
 
@@ -607,7 +885,12 @@ bool mqtt_manager_publish_online(void)
 
     const SensorData data = radar_manager_get_sensor_data();
 
-    char payload[384];
+    // 使用 device_sn 作为 deviceId（和 Arduino 一致）
+    static char deviceId[32] = {};
+    mqtt_manager_make_payload_device_id(deviceId, sizeof(deviceId));
+
+    static char payload[384];
+    payload[0] = '\0';
     std::snprintf(payload,
                   sizeof(payload),
                   "{\"id\":\"%lu\",\"method\":\"thing.event.property.post\","
@@ -615,7 +898,7 @@ bool mqtt_manager_publish_online(void)
                   "\"personDetected\":0,\"heartbeat\":1,\"timestamp\":%llu,"
                   "\"sleepState\":%u,\"noOneAlert\":%u,\"wifiIP\":\"%s\"}}",
                   static_cast<unsigned long>(gMqttMessageId++),
-                  gMqttDeviceName,
+                  deviceId,
                   (unsigned long long)radar_now_ms(),
                   static_cast<unsigned>(data.sleep_state),
                   static_cast<unsigned>(data.no_one_alert),
@@ -640,7 +923,12 @@ bool mqtt_manager_publish_radar_snapshot(const RadarReportSnapshot *snapshot)
                          (snapshot->heart_rate == 0.0f && snapshot->breath_rate == 0.0f);
     const WiFiManagerSnapshot wifiSnapshot = wifi_manager_get_snapshot();
 
-    char payload[1024] = {};
+    // 使用 device_sn 作为 deviceId（和 Arduino 一致）
+    static char deviceId[32] = {};
+    mqtt_manager_make_payload_device_id(deviceId, sizeof(deviceId));
+
+    static char payload[1024];
+    payload[0] = '\0';
     if (isNoOne) {
         std::snprintf(payload,
                       sizeof(payload),
@@ -649,7 +937,7 @@ bool mqtt_manager_publish_radar_snapshot(const RadarReportSnapshot *snapshot)
                       "\"personDetected\":0,\"heartbeat\":1,\"timestamp\":%llu,"
                       "\"sleepState\":%u,\"noOneAlert\":%u,\"wifiIP\":\"%s\"}}",
                       static_cast<unsigned long>(gMqttMessageId++),
-                      gMqttDeviceName,
+                      deviceId,
                       (unsigned long long)radar_now_ms(),
                       static_cast<unsigned>(snapshot->sleep_state),
                       static_cast<unsigned>(snapshot->no_one_alert),
@@ -667,7 +955,7 @@ bool mqtt_manager_publish_radar_snapshot(const RadarReportSnapshot *snapshot)
                       "\"bedStatus\":%u,\"struggleAlert\":%u,\"noOneAlert\":%u,"
                       "\"wifiIP\":\"%s\"}}",
                       static_cast<unsigned long>(gMqttMessageId++),
-                      gMqttDeviceName,
+                      deviceId,
                       snapshot->heart_rate,
                       snapshot->breath_rate,
                       static_cast<unsigned>(snapshot->presence),
@@ -707,7 +995,12 @@ bool mqtt_manager_publish_sleep_snapshot(const RadarReportSnapshot *snapshot)
         return false;
     }
 
-    char sleepPayload[1024] = {};
+    // 使用 device_sn 作为 deviceId（和 Arduino 一致）
+    static char deviceId[32] = {};
+    mqtt_manager_make_payload_device_id(deviceId, sizeof(deviceId));
+
+    static char sleepPayload[1024];
+    sleepPayload[0] = '\0';
     std::snprintf(sleepPayload,
                   sizeof(sleepPayload),
                   "{\"id\":\"%lu\",\"method\":\"thing.event.property.post\","
@@ -722,7 +1015,7 @@ bool mqtt_manager_publish_sleep_snapshot(const RadarReportSnapshot *snapshot)
                   "\"struggleAlert\":%u,\"noOneAlert\":%u,\"awakeDuration\":%u,"
                   "\"lightSleepDuration\":%u,\"deepSleepDuration\":%u}}",
                   static_cast<unsigned long>(gMqttMessageId++),
-                  gMqttDeviceName,
+                  deviceId,
                   static_cast<unsigned>(snapshot->sleep_score),
                   static_cast<unsigned>(snapshot->sleep_grade),
                   static_cast<unsigned>(snapshot->sleep_total_time),

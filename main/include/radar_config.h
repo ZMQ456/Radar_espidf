@@ -5,9 +5,9 @@
 extern "C" {
 #endif
 
-#define RADAR_UART_PORT  2
-#define RADAR_RX_PIN    16
-#define RADAR_TX_PIN    17
+#define RADAR_UART_PORT  1
+#define RADAR_RX_PIN    11
+#define RADAR_TX_PIN    10
 #define RADAR_BAUD_RATE 115200
 #define RADAR_UART_BUFFER_SIZE 4096
 #define RADAR_FRAME_BUFFER_SIZE 256

@@ -6,8 +6,8 @@
 #define APP_WIFI_DEFAULT_PASSWORD ""
 
 // MQTT configuration aligned with the Arduino enjoy-iot prototype.
-#define APP_MQTT_BROKER_URI "mqtt://www.lmhrt.cn:1883"
-#define APP_MQTT_CLIENT_ID  "dEkr5BkkXTFZFBdR"
+#define APP_MQTT_BROKER_URI "mqtt://www.lmhrt.cn:1883"  // MQTT broker URI
+#define APP_MQTT_CLIENT_ID  "dEkr5BkkXTFZFBdR"  // MQTT client ID
 
 // InfluxDB endpoint aligned with the Arduino prototype.
 #define APP_INFLUXDB_HOST   "www.lmhrt.cn"
