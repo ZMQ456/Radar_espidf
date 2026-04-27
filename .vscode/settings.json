@@ -20,7 +20,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.portWin": "COM14",
+  "idf.portWin": "COM29",
   "idf.baudRate": 460800,
   "idf.monitorBaudRate": "115200",
   "idf.currentSetup": "E:\\esp-32\\v5.3.4\\esp-idf",
