@@ -4,9 +4,9 @@
     {
       "label": "ESP-IDF: Build (build_ninja)",
       "type": "process",
-      "command": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env\\Scripts\\python.exe",
+      "command": "C:\\Espressif\\tools\\python\\v6.0\\venv\\Scripts\\python.exe",
       "args": [
-        "E:\\esp-32\\v5.3.4\\esp-idf\\tools\\idf.py",
+        "C:\\esp\\v6.0\\esp-idf\\tools\\idf.py",
         "-B",
         "build_ninja",
         "build"
@@ -14,11 +14,12 @@
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "IDF_PATH": "E:\\esp-32\\v5.3.4\\esp-idf",
+          "IDF_PATH": "C:\\esp\\v6.0\\esp-idf",
           "IDF_TARGET": "esp32s3",
-          "IDF_PYTHON_ENV_PATH": "C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env",
-          "ESP_ROM_ELF_DIR": "C:\\Users\\z1831\\.espressif\\tools\\esp-rom-elfs\\20240305",
-          "PATH": "C:\\Users\\z1831\\.espressif\\tools\\xtensa-esp-elf\\esp-13.2.0_20240530\\xtensa-esp-elf\\bin;C:\\Users\\z1831\\.espressif\\tools\\cmake\\3.30.2\\bin;C:\\Users\\z1831\\.espressif\\tools\\ninja\\1.12.1;C:\\Users\\z1831\\.espressif\\python_env\\idf5.3_py3.11_env\\Scripts;${env:PATH}"
+          "IDF_PYTHON_ENV_PATH": "C:\\Espressif\\tools\\python\\v6.0\\venv",
+          "ESP_ROM_ELF_DIR": "C:\\Espressif\\tools\\esp-rom-elfs\\20241011",
+          "IDF_COMPONENT_LOCAL_STORAGE_URL": "file://C:\\Espressif\\tools",
+          "PATH": "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-15.2.0_20251204\\xtensa-esp-elf\\bin;C:\\Espressif\\tools\\cmake\\4.0.3\\bin;C:\\Espressif\\tools\\ninja\\1.12.1;C:\\Espressif\\tools\\python\\v6.0\\venv\\Scripts;${env:PATH}"
         }
       },
       "group": {

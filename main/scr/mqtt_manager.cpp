@@ -43,7 +43,7 @@
 #include "esp_err.h"          // ESP32 错误码定义
 #include "esp_event.h"        // ESP32 事件循环
 #include "esp_log.h"          // ESP32 日志系统
-#include "mbedtls/md5.h"      // MD5 哈希算法（生成密码）
+#include "esp_rom_md5.h"      // MD5 哈希算法（生成密码）
 #include "mqtt_client.h"      // ESP MQTT 客户端
 #include "radar_platform.h"   // 平台接口（radar_now_ms, radar_sleep_ms）
 #include "system_state.h"     // 系统状态管理
@@ -194,15 +194,11 @@ static void mqtt_manager_make_password(const char *client_id, char *buffer, size
     std::snprintf(raw, sizeof(raw), "%s%s", MQTT_PRODUCT_SECRET, client_id);
 
     // 步骤 2: 计算 MD5
-    unsigned char digest[16] = {};
-    mbedtls_md5_context ctx;
-    mbedtls_md5_init(&ctx);
-    (void)mbedtls_md5_starts(&ctx);
-    (void)mbedtls_md5_update(&ctx,
-                             reinterpret_cast<const unsigned char *>(raw),
-                             std::strlen(raw));
-    (void)mbedtls_md5_finish(&ctx, digest);
-    mbedtls_md5_free(&ctx);
+    uint8_t digest[ESP_ROM_MD5_DIGEST_LEN] = {};
+    md5_context_t ctx = {};
+    esp_rom_md5_init(&ctx);
+    esp_rom_md5_update(&ctx, raw, static_cast<uint32_t>(std::strlen(raw)));
+    esp_rom_md5_final(digest, &ctx);
 
     // 步骤 3: 转换为十六进制字符串
     for (size_t i = 0U; i < sizeof(digest); ++i) {

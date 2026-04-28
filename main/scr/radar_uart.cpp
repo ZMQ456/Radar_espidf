@@ -573,18 +573,16 @@ bool radar_uart_init(void)
     }
 
     // 步骤 1: 配置 UART 参数
-    const uart_config_t uartConfig = {
-        .baud_rate = RADAR_BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .rx_flow_ctrl_thresh = 0,
-        .source_clk = UART_SCLK_DEFAULT,
-        .flags = {
-            .backup_before_sleep = 0,  // 睡眠时不保存配置
-        },
-    };
+    uart_config_t uartConfig = {};
+    uartConfig.baud_rate = RADAR_BAUD_RATE;
+    uartConfig.data_bits = UART_DATA_8_BITS;
+    uartConfig.parity = UART_PARITY_DISABLE;
+    uartConfig.stop_bits = UART_STOP_BITS_1;
+    uartConfig.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uartConfig.rx_flow_ctrl_thresh = 0;
+    uartConfig.source_clk = UART_SCLK_DEFAULT;
+    uartConfig.flags.allow_pd = 0;  // 睡眠时不允许掉电保存
+    uartConfig.flags.backup_before_sleep = 0;
 
     // 步骤 2: 安装 UART 驱动
     // 只配置 RX 缓冲区（1024 字节），TX 缓冲区为 0（只接收不发送）
