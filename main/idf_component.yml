@@ -1,4 +1,5 @@
 dependencies:
+  espressif/esp-sr: "^2.0.0"
   espressif/mqtt: "^1.0.0"
   idf:
     version: ">=6.0"

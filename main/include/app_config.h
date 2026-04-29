@@ -5,6 +5,20 @@
 #define APP_WIFI_DEFAULT_SSID     ""  
 #define APP_WIFI_DEFAULT_PASSWORD ""
 
+// Voice pipeline configuration.
+#define APP_VOICE_ENABLED                   1
+#define APP_VOICE_SERVER_HOST              "www.lmhrt.cn"
+#define APP_VOICE_SERVER_PORT              16001U
+#define APP_VOICE_DEVICE_ID_DEFAULT        3001U
+#define APP_VOICE_SAMPLE_RATE_HZ           16000U
+#define APP_VOICE_WAKE_TRIGGER_COOLDOWN_MS 3000U
+#define APP_VOICE_I2S_BCLK_PIN             4
+#define APP_VOICE_I2S_WS_PIN               3
+#define APP_VOICE_I2S_DIN_PIN              2
+// This keeps the verified Audio_test_idf wiring. If it conflicts with your LED,
+// change it before flashing to hardware.
+#define APP_VOICE_I2S_DOUT_PIN             5
+
 // MQTT configuration aligned with the Arduino enjoy-iot prototype.
 #define APP_MQTT_BROKER_URI "mqtt://www.lmhrt.cn:1883"  // MQTT broker URI
 #define APP_MQTT_CLIENT_ID  "dEkr5BkkXTFZFBdR"  // MQTT client ID

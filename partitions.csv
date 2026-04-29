@@ -1,4 +1,7 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 1856K,
+# Note: aligned with the Audio_test_idf layout for the same ESP32-S3 dev board.
+nvs,      data, nvs,     0x9000,  0x4000,
+phy_init, data, phy,     0xd000,  0x1000,
+factory,  app,  factory, 0x10000, 0x2C0000,
+ota_0,    app,  ota_0,   0x2D0000,0x2C0000,
+model,    data, spiffs,  0x590000,0x270000,

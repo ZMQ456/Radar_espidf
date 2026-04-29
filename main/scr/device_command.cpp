@@ -31,6 +31,7 @@
 
 #include "device_identity.h"  // 设备身份管理（获取/设置 device_id, device_sn）
 #include "esp_log.h"          // ESP32 日志系统
+#include "voice_manager.h"
 
 static const char *TAG = "device_command";  // 日志标签
 
@@ -176,7 +177,7 @@ static bool parse_uint64_arg(const char *arg, uint64_t *value)
  */
 static void print_help(void)
 {
-    ESP_LOGI(TAG, "commands: show_device | set_device_id <1000-65535> | set_device_sn <uint64>");
+    ESP_LOGI(TAG, "commands: show_device | set_device_id <1000-65535> | set_device_sn <uint64> | voice_once");
 }
 
 // ============================================================================
@@ -299,6 +300,19 @@ bool device_command_handle_line(const char *line)
 
     // 未知命令：显示帮助信息
     ESP_LOGW(TAG, "unknown command: %s", input);
+    if (std::strcmp(input, "voice_once") == 0) {
+        if (!voice_manager_is_initialized()) {
+            ESP_LOGW(TAG, "voice manager not initialized");
+            return true;
+        }
+        if (!voice_manager_trigger_session()) {
+            ESP_LOGW(TAG, "voice trigger rejected");
+            return true;
+        }
+        ESP_LOGI(TAG, "voice session triggered");
+        return true;
+    }
+
     print_help();
     return true;
 }

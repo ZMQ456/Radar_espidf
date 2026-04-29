@@ -1,3 +1,11 @@
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "mqtt_manager.h"
+#include "system_state.h"
+#include "voice_manager.h"
+
+#include <inttypes.h>
 // ============================================================================
 // 头文件包含
 // ============================================================================
@@ -231,6 +239,9 @@ extern "C" void app_main(void)
              static_cast<unsigned>(deviceHash),
              mqttClientId);
     ESP_LOGI(TAG, "mqtt configured uri=%s client_id=%s", APP_MQTT_BROKER_URI, mqttClientId);
+    if (!voice_manager_init()) {
+        ESP_LOGW(TAG, "voice manager init skipped or failed");
+    }
 
     // ------------------------------------------------------------------------
     // 步骤 9: 设置系统为运行阶段

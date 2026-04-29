@@ -1,12 +1,16 @@
 idf_component_register(
     SRCS
         "scr/ble_manager.cpp"
+        "scr/amp.c"
+        "scr/audio_pipeline.c"
         "scr/data_processor.cpp"
         "scr/device_command.cpp"
         "scr/device_identity.cpp"
         "scr/emotion_analyzer_simple.cpp"
         "scr/influx_manager.cpp"
         "scr/main.cpp"
+        "scr/mem_utils.c"
+        "scr/mic.c"
         "scr/mqtt_manager.cpp"
         "scr/radar_manager.cpp"
         "scr/radar_platform.c"
@@ -14,21 +18,28 @@ idf_component_register(
         "scr/sleep_analyzer.cpp"
         "scr/system_state.cpp"
         "scr/tasks_manager.cpp"
+        "scr/tcp.c"
+        "scr/utils.c"
+        "scr/voice_manager.cpp"
+        "scr/wake_engine.c"
         "scr/wifi_manager.cpp"
     INCLUDE_DIRS
         "."
         "include"
     REQUIRES
         bt
+        esp_driver_i2s
         esp_driver_gpio
         esp_driver_ledc
         esp_driver_uart
         esp_event
         esp_http_client
+        esp_ringbuf
         mqtt
         mbedtls
         esp_netif
         esp_system
         esp_wifi
+        lwip
         nvs_flash
 )
